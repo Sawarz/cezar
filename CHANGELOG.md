@@ -1,7 +1,62 @@
 # Unreleased
 
+## ✨ Features
+
+- ✨ **Drag the projects in the left drawer into the order you want.** The sidebar sorted its
+  project groups by `lastOpenedAt`, a timestamp bumped only when a project is registered or when
+  cezar boots in that folder — so the order was really "the sequence the servers booted in", and
+  the repo you live in all day could sit below three you touch once a month with no way to move
+  it. Each group now carries a grip: drag it, or focus it and press Space, arrows, Space. The
+  order is stored on the server, in `~/.cezar/ui-state.json` under the new optional
+  `sidebar.projectOrder`, so it is the same order in every browser you open the cockpit in — the
+  phone and the desktop agree — and it survives reloads and restarts. That is deliberately the
+  opposite call from `sidebar.collapsed`, which moved to per-browser storage: which groups are
+  *shut* describes the window you are looking through, while what order your repos are *in* is a
+  considered choice made once, and redoing it on every device is the annoyance. The ⌘K palette
+  reads the same order — one registry, never listed two ways. A project registered after your
+  last drag floats to the top by recency rather than hiding under the list, an id that is no
+  longer registered is ignored instead of leaving a hole, and Settings → Appearance grows a
+  "Reset order" that appears only once there is something to undo. A missing project keeps its
+  place but has no grip: that row is inert by design.
+- ✨ **The task conversation has a clock.** Every other surface gave you a temporal anchor — the
+  tasks table shows relative times, the auto-resume hint an absolute one — while the thread, where
+  the actual work is, showed none: coming back to a task, nothing on screen said whether the last
+  agent message landed thirty seconds ago or last Tuesday, and a forty-message transcript spanning
+  two days read as one undifferentiated scroll. Each conversation turn now carries the two stamps
+  it always had on disk: a short local time at the foot of the user bubble that opened it, and the
+  agent's finishing time with how long the turn took (`14:36 · 4m 12s`) where it ended. Turns that
+  fall on different local days are parted by a dated rule — *Today*, *Yesterday*, or the date — so
+  a task resumed after a usage limit or a night reads as the two sittings it was. Times are
+  absolute and never tick: the exact instant is one hover away in the tooltip, and no row re-renders
+  on a timer or changes height under the virtualizer. Nothing new is persisted and no API changed —
+  every event has carried a required `ts` and every queued message a `createdAt` since the
+  beginning; the thread simply stopped throwing them away. A turn still running shows no completion
+  stamp rather than a placeholder that would jump when it fills in, and a transcript whose stamps
+  are missing or unreadable — an old recording, a hand-edited NDJSON — renders exactly as it did
+  before rather than printing `Invalid Date`. A message you stacked onto a running task keeps its
+  own queued-at time but never dates the older conversation it sits above. Sub-agent panels are
+  unchanged for now: their entries are one uninterrupted stream with no turn boundaries to hang a
+  clock on. Issue: #941.
+
 ## 🐛 Fixes
-- 🐛 A task that crashed before its agent ever started is no longer a dead end — Continue carries it on in a fresh session handed the previous conversation. (#974) *(@patzick)*
+
+- 🐛 **A task that crashed before its agent started is no longer a dead end.** Continue used to
+  need a recorded session id, so a run killed in the window between "accepted" and "spawned" —
+  most often a cezar restart while it queued for the repository working tree — came back as
+  `cezar restarted — could not resume the interrupted task (no agent session to resume)` above a
+  read-only composer saying `Session closed — no session to resume.` Nothing about the task was
+  broken: the worktree, the branch, the handoff file and the prompt were all still there. The only
+  action left was Delete. Continue now covers that case the way a runner switch has been covered
+  since #954: it opens a **new** session handed the previous one's record — the original task, the
+  run's state and error, and a bounded replay of the conversation, oldest messages dropped first
+  so a long thread cannot fill the context window with history before the agent reads its
+  instruction. The thread says when it did that rather than resuming, and the composer promises
+  the weaker thing honestly — *Continue in a new session — the previous conversation is replayed
+  to the agent*, never "pick up where you left off". A run that DOES have a session still resumes
+  it, unchanged and without a summary of a conversation it is already in. An ask card on such a
+  task can be answered again too, since there is no longer a closed run whose answer has nowhere
+  to go. Terminal ("Open in CLI") deliberately still needs a real session id — it hands one to a
+  shell. Spec: `.ai/specs/2026-09-11-continue-without-a-session.md`.
 
 # 0.10.1 (2026-09-04)
 
