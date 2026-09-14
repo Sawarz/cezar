@@ -19,10 +19,11 @@ const INTERRUPTED = 'interrupted — cezar process exited during the run';
  * task (no agent session to resume)", the composer answered "Session closed — no session to
  * resume.", and the only remaining action on a task mid-flight was Delete.
  *
- * It continues in a FRESH session now, opened on a replay of the old one (`buildSessionRecap`).
- * These cases pin both halves: no `--resume` reaches the CLI, and the briefing does reach the
- * agent — plus the guard case, that a run which DOES have a session still resumes it untouched
- * and is told nothing about a previous session it is already in.
+ * It continues in a FRESH session now, opened on the hand-off `freshContinuationContext` (#954)
+ * already builds for a runner switch — the same problem, so the same briefing rather than a
+ * second one beside it. These cases pin both halves: no `--resume` reaches the CLI, and the
+ * briefing does reach the agent — plus the guard case, that a run which DOES have a session still
+ * resumes it untouched and is told nothing about a previous session it is already in.
  */
 describe('Continue with no session to resume opens a fresh, briefed session', () => {
   let repoRoot: string;
@@ -126,13 +127,15 @@ describe('Continue with no session to resume opens a fresh, briefed session', ()
 
     const opening = stdinLines()[0];
     expect(opening).toBeDefined();
-    // The briefing, the original task, the replayed conversation…
-    expect(opening?.userText).toContain('## Previous session (cezar)');
+    // The briefing, the original task, the run state, the replayed conversation…
+    expect(opening?.userText).toContain('fresh provider session');
+    expect(opening?.userText).toContain('## Original task');
     expect(opening?.userText).toContain('Fix the login redirect that drops the session cookie');
     expect(opening?.userText).toContain('interrupted — cezar process exited during the run');
-    expect(opening?.userText).toContain('[agent] Reading src/middleware.ts.');
-    expect(opening?.userText).toContain('[user] check the cookie flags too');
+    expect(opening?.userText).toContain('Assistant:\nReading src/middleware.ts.');
+    expect(opening?.userText).toContain('User:\ncheck the cookie flags too');
     // …and the user's own prompt last, fenced off from the replayed history.
+    expect(opening?.userText).toContain('## New user instruction');
     expect(opening?.userText.trimEnd().endsWith('keep going please')).toBe(true);
 
     // There was nothing to reattach to, so nothing may claim otherwise on the wire.
@@ -143,7 +146,9 @@ describe('Continue with no session to resume opens a fresh, briefed session', ()
       .readEvents(record.id)
       .filter((event) => event.type === 'note')
       .map((event) => String(event.message ?? ''));
-    expect(notes.some((message) => message.includes('no session to resume — started a fresh session'))).toBe(true);
+    expect(
+      notes.some((message) => message.includes('the previous session could not be resumed — continuing in a fresh session')),
+    ).toBe(true);
   }, 30_000);
 
   /** The prompt the user typed is what the TRANSCRIPT must show. The briefing is delivery-only:
@@ -158,7 +163,7 @@ describe('Continue with no session to resume opens a fresh, briefed session', ()
       .filter((event) => event.type === 'user-message')
       .map((event) => String(event.text ?? ''));
     expect(userMessages).toContain('keep going please');
-    expect(userMessages.some((text) => text.includes('## Previous session'))).toBe(false);
+    expect(userMessages.some((text) => text.includes('## Original task'))).toBe(false);
   }, 30_000);
 
   /** The guard case: unchanged behavior for the run that HAS a session. It resumes, and being
@@ -172,19 +177,27 @@ describe('Continue with no session to resume opens a fresh, briefed session', ()
 
     expect(spawnArgs().some((args) => args.includes('--resume') && args.includes('sess-1'))).toBe(true);
     const opening = stdinLines()[0];
-    expect(opening?.userText).not.toContain('## Previous session (cezar)');
+    expect(opening?.userText).not.toContain('fresh provider session');
     expect(opening?.userText).toBe('keep going please');
 
     const notes = store
       .readEvents(record.id)
       .filter((event) => event.type === 'note')
       .map((event) => String(event.message ?? ''));
-    expect(notes.some((message) => message.includes('no session to resume'))).toBe(false);
+    expect(notes.some((message) => message.includes('could not be resumed'))).toBe(false);
   }, 30_000);
 
-  /** Boot recovery is where the user met this: it is the caller that turns an interrupted run
-   *  into a continuation, and it used to give up here and leave the task dead. */
-  it('recover() continues an interrupted run that never recorded a session', async () => {
+  /**
+   * Boot recovery is the surface the user actually met this on — `cezar restarted — could not
+   * resume the interrupted task (no agent session to resume)`, and the task was over.
+   *
+   * The exit here is NOT this spec's fresh-session Continue: #972 gave a `running` run that never
+   * reached an agent a better one, re-queueing it whole so the workflow starts from the top rather
+   * than "continuing" a task that had done nothing yet. Both fixes answer the same report, and
+   * what this pins is the part that matters either way — recovery finds a way forward instead of
+   * stopping at that line.
+   */
+  it('recover() carries on an interrupted run that never recorded a session', async () => {
     const record = store.createRun({
       title: 'fix the login redirect',
       workflow: 'quick-task',
@@ -204,11 +217,10 @@ describe('Continue with no session to resume opens a fresh, briefed session', ()
         .map((event) => String(event.message ?? ''));
       expect(lifecycle.some((message) => message.includes('could not resume'))).toBe(false);
       expect(
-        lifecycle.some((message) =>
-          message.includes('no session to resume; continuing the interrupted task in a fresh session'),
-        ),
+        lifecycle.some((message) => message.includes('the task had not reached its agent session')),
       ).toBe(true);
-      expect(store.getRun(record.id)?.steps.some((step) => step.id === 'continue-1')).toBe(true);
+      // …and it really is going somewhere: the run leaves `running` and settles a turn.
+      expect(store.getRun(record.id)?.status).not.toBe('failed');
       await waitForContinuation(record.id);
     } finally {
       recovering.dispose();
