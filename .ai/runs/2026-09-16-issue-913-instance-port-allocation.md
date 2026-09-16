@@ -78,21 +78,41 @@ boot-race the reporter documented in the issue's follow-up comment (two units bo
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
+PR: #1003
+
 ### Phase 1: Machine-wide port allocation
 
-- [ ] 1.1 Add an injectable loopback bind probe and make `nextFreeInstancePort` use it as the authority
-- [ ] 1.2 Report a port conflict (recorded-by-another-instance vs held-by-a-foreign-process) instead of silently stepping over it
+- [x] 1.1 Add an injectable loopback bind probe and make `nextFreeInstancePort` use it as the authority — 4e769d5a
+- [x] 1.2 Report a port conflict (recorded-by-another-instance vs held-by-a-foreign-process) instead of silently stepping over it — 4e769d5a
 
 ### Phase 2: Refuse a port the installer cannot own
 
-- [ ] 2.1 `runInstall` stops a first-time install whose `primaryPort` is not bindable, before anything is rendered
-- [ ] 2.2 Await the allocation at the CLI auto-pick site so the printed port is the allocated port
+- [x] 2.1 `runInstall` stops a first-time install whose `primaryPort` is not bindable, before anything is rendered — 6bb733ca
+- [x] 2.2 Await the allocation at the CLI auto-pick site so the printed port is the allocated port — 6bb733ca
 
 ### Phase 3: Regression tests
 
-- [ ] 3.1 `state.test.ts`: allocation skips a bound-but-unrecorded port, refuses an exhausted window, and the real probe agrees with a real socket
-- [ ] 3.2 `strategies.test.ts`: two instances on one host — the second's vhost, unit and state all carry its own port and never the first's
+- [x] 3.1 `state.test.ts`: allocation skips a bound-but-unrecorded port, refuses an exhausted window, and the real probe agrees with a real socket — 4e769d5a
+- [x] 3.2 `strategies.test.ts`: two instances on one host — the second's vhost, unit and state all carry its own port and never the first's — 5292cb5b
 
 ### Phase 4: Gate
 
-- [ ] 4.1 Full validation gate, review pass, PR
+- [x] 4.1 Full validation gate, review pass, PR
+
+## Gate evidence
+
+Run with the documented cezar-task workaround (`TMPDIR`/`TMP` outside the repo, exported
+`CEZ_*` unset) — without it ~9–13 tests fail on any branch including clean `origin/main`.
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | ✅ clean (contract, api-client, server, web) |
+| `npm test` | ✅ 390 files / 7181 tests |
+| `npm run test:unit` | ✅ 36/36 |
+| `npm run build` | ✅ `check:pack ok — 530 files` |
+| `npm run test:package` | ✅ 16/16 |
+
+The regression tests were confirmed **red without the fix**: reverting
+`nextFreeInstancePort` to the recorded-state-only scan fails
+`a second instance's vhost never points at the first instance's port`
+(`expected 43549 not to be 43549`) and both allocator cases.
