@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent, AgentRunSpec } from '../core/agent-runner.ts';
+import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
@@ -22,18 +22,19 @@ vi.mock('../core/runner-factory.ts', () => ({
   createRunner: () => ({
     backend: 'claude' as const,
     run: async () => ({ text: '', toolCalls: [], tokensUsed: 0 }),
-    startSession: (spec: AgentRunSpec, onEvent: (event: AgentEvent) => void) => {
+    startSession: (spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void) => {
       captured.specs.push(spec);
       // A real backend mints the session id on the wire and the engine persists it on the step;
       // `continueRun` refuses a run whose steps carry none ('no agent session to resume'), so a
       // stub that never emits one cannot be driven `startRun` → Continue. Emitted on a macrotask
       // so the engine has finished wiring `state.session` before the event lands, and before
-      // `result` resolves so the step is never marked done without its id.
+      // `result` resolves so the step is never marked done without its id. `onEvent` is optional
+      // on `AgentRunner.startSession`, so the stub keeps it optional too.
       const sessionId = `sess-${captured.specs.length}`;
       return {
-        result: new Promise<{ text: string; toolCalls: never[]; tokensUsed: number }>((resolve) => {
+        result: new Promise<AgentRunResult>((resolve) => {
           setTimeout(() => {
-            onEvent({ type: 'session', sessionId });
+            onEvent?.({ type: 'session', sessionId });
             resolve({ text: 'ok', toolCalls: [], tokensUsed: 0 });
           }, 0);
         }),
@@ -178,11 +179,14 @@ describe('a resumed session keeps its workflow step tools', () => {
       steps: [{ id: 'work', name: 'Work', prompt: '{{task}}', allowedTools: TOOLS, bashAllowlist: ['git'] }],
     };
 
-    const record = manager!.startRun(NARROWED, { task: 'do the thing', worktree: false });
+    // Both ends pin `claude` explicitly. An absent `defaultRunner` falls through to the
+    // MACHINE-wide `~/.cezar/` agent defaults (`withMachineDefaults`, `config.ts`), so leaving it
+    // implicit would make this assertion depend on the config of whoever runs the suite.
+    const record = manager!.startRun(NARROWED, { task: 'do the thing', worktree: false, runner: 'claude' });
     const opening = await specAt(0);
     await settled(record.id);
 
-    expect(manager!.continueRun(record.id, { text: 'keep going' })).toEqual({ ok: true });
+    expect(manager!.continueRun(record.id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
     const resumed = await specAt(1);
 
     // Anchor the first spawn, then compare the second to it rather than to a constant, so the
