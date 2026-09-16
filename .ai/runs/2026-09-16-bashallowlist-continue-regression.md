@@ -107,13 +107,13 @@ direction, would leave every existing case green.
 
 ### Phase 1: Verify the premise
 
-- [ ] 1.1 Re-confirm the continuation call site and the published release
-- [ ] 1.2 State the unpinned invariant in `continuation-tools.test.ts`
+- [x] 1.1 Re-confirm the continuation call site and the published release — 9761ba63
+- [x] 1.2 State the unpinned invariant in `continuation-tools.test.ts` — 9761ba63
 
 ### Phase 2: Regression coverage
 
-- [ ] 2.1 Add the end-to-end two-spec invariant case
-- [ ] 2.2 Prove the new case fails without the fix
+- [x] 2.1 Add the end-to-end two-spec invariant case — fdf5f8c6
+- [x] 2.2 Prove the new case fails without the fix — fdf5f8c6
 
 ### Phase 3: Validation and PR
 
