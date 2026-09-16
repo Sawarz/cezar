@@ -100,16 +100,32 @@ untouched ordinary path; then the full configured gate.
 
 ### Phase 1: a one-call poll budget override
 
-- [ ] 1.1 Resolve `maxRecords` once in `poll()` from an optional `GithubPollOptions.maxRecords`, clamped to the 100-record cap
-- [ ] 1.2 Poller tests: an override widens the evaluated prefix without mutating the definition
+- [x] 1.1 Resolve `maxRecords` once in `poll()` from an optional `GithubPollOptions.maxRecords`, clamped to the 100-record cap — fb108557
+- [x] 1.2 Poller tests: an override widens the evaluated prefix without mutating the definition — fb108557
 
 ### Phase 2: the scheduler ladder and the pinned-cursor marker
 
-- [ ] 2.1 Add the optional `pinnedCursor` runtime-state key to both state schemas and clear it on re-baseline
-- [ ] 2.2 Climb the budget ladder in `check()` when a poll makes no progress while reporting truncated results
-- [ ] 2.3 Record the cursor the ladder failed at, skip the climb while it still matches, and clear it when the cursor moves
+- [x] 2.1 Add the optional `pinnedCursor` runtime-state key to both state schemas and clear it on re-baseline — 5a62f2e3
+- [x] 2.2 Climb the budget ladder in `check()` when a poll makes no progress while reporting truncated results — 5a62f2e3
+- [x] 2.3 Record the cursor the ladder failed at, skip the climb while it still matches, and clear it when the cursor moves — 5a62f2e3
 
 ### Phase 3: tests and the validation gate
 
-- [ ] 3.1 Scheduler tests: the pinned fixed point, the ladder escaping it, the still-pinned-at-100 case not re-climbing, and an ordinary no-new-events poll unaffected
-- [ ] 3.2 Run the full validation gate and refresh the PR body
+- [x] 3.1 Scheduler tests: the pinned fixed point, the ladder escaping it, the still-pinned-at-100 case not re-climbing, and an ordinary no-new-events poll unaffected — 5a62f2e3
+- [x] 3.2 Run the full validation gate and refresh the PR body — 5a62f2e3
+
+PR: #1002
+
+### Gate (run with `TMPDIR=/tmp TMP=/tmp` and the run's `CEZ_*` vars unset — see below)
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | exit 0 |
+| `npm test` | 390 files, 7180 tests, 0 failures, exit 0 |
+| `npm run test:unit` | 36 pass, 0 fail, exit 0 |
+| `npm run build` | exit 0 — `check:pack ok — 530 files, 88 under web/dist` |
+| `npm run test:package` | 16 pass, 0 fail, exit 0 |
+
+Inside a cezar task `TMPDIR`/`TMP` point inside the repo, so `mkdtemp`-based tests find a git repo
+where they assert there is none, and the run's exported `CEZ_*` vars trip the zero-config prompt
+tests. Neither is related to this change; the gate is run with both neutralised.
