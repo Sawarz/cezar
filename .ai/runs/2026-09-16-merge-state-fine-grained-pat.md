@@ -96,8 +96,8 @@ genuinely failing (still `available: false`).
 
 ### Phase 3: the panel says what it cannot read
 
-- [ ] 3.1 Render the degraded check tier in `GithubMergeBox`
-- [ ] 3.2 Cockpit unit test for the degraded panel
+- [x] 3.1 Render the degraded check tier in `GithubMergeBox` — 56f34ae2
+- [x] 3.2 Cockpit unit test for the degraded panel — 56f34ae2
 
 ### Phase 4: validation
 
