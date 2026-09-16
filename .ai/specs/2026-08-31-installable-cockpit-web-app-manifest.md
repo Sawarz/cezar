@@ -15,6 +15,32 @@ from an iOS home screen against a `server-install` domain.
 
 No service worker, no offline mode, no push.
 
+## Resolved assumptions (autonomous defaults)
+
+- The implementation PR must carry an approved, reachable source artifact at
+  `packages/web/public/cezar-logo.svg` before Phase 1 starts. Derived PNGs are committed beside it;
+  an external design file may be used during preparation only when it is attached or otherwise
+  reachable from the implementation PR, never through a contributor's absolute local path.
+- The manifest uses `display: "minimal-ui"`. Port fallback can leave an installed app pointing at a
+  stale origin, so retaining minimal navigation/reload affordances is safer than promising a fully
+  chrome-less window.
+- Unit suites cover pure decisions, route registration and no-build 404s. Byte-level, built-HTML and
+  tarball assertions belong to the configured `npm run test:package` gate, which runs after the build;
+  the optional browser script is exploratory evidence, not the correctness gate.
+- The pre-paint theme IIFE remains inline and intentionally mirrors `theme.ts`; its built output is
+  tested rather than extracted into a module that would run too late.
+
+## Open Questions
+
+There are no blocking open questions for the local install path. Hosted basic-auth installation
+remains an acceptance check in Phase 2, because its browser credential behavior must be verified on a
+real `server-install` deployment.
+
+## Non-goals
+
+Service workers, offline fallback, Web Push, a daemon or launcher that starts cezar, native wrappers,
+automatic icon rasterization, port discovery, and cross-origin API changes remain out of scope.
+
 ## Problem Statement
 
 The cockpit is a browser tab. For a tool the README describes as something you leave running and
@@ -135,6 +161,12 @@ of the canvas, and Apple applies its own squircle to a full-bleed square, so bot
 the mark re-composited on an edge-to-edge `#9655fd` field — the maskable one additionally scaled so
 the mark clears the safe zone.
 
+The artwork is a prerequisite, not an implicit local input: the implementation PR must add the SVG
+at `packages/web/public/cezar-logo.svg` before Phase 1 begins, together with the derived files below.
+If design work happens outside the repository, the approved source must be attached to that PR or
+made available through a stable repository/PR artifact. The implementation must never depend on a
+path such as `/Users/...` on one contributor's laptop.
+
 **The PNGs are committed, not generated.** The repo has no image toolchain, and adding `sharp` or
 `resvg` to `packages/web` to rasterize four files that change when the brand changes trades a build
 dependency for nothing. The cost is real: an SVG edit does not propagate, and whoever changes the
@@ -150,7 +182,7 @@ mark must re-export. That is the bargain `open-mercato.svg` already lives under.
   "description": "Local cockpit for running and tracking AI agent tasks in your repo.",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
+  "display": "minimal-ui",
   "theme_color": "#0d0d0d",
   "background_color": "#0d0d0d",
   "icons": [
@@ -161,6 +193,11 @@ mark must re-export. That is the bargain `open-mercato.svg` already lives under.
   ]
 }
 ```
+
+`minimal-ui` is deliberate. A standalone window hides the address bar and makes the port-fallback
+failure in the edge-case section harder to recover from; minimal UI keeps the install app-like while
+retaining the platform's basic navigation affordances. Platforms may still render the mode slightly
+differently.
 
 `theme_color` and `background_color` are the dark tokens (`--background: #0d0d0d`), because dark is
 what an unconfigured cockpit paints. The manifest carries one value and cannot follow a preference;
@@ -175,11 +212,13 @@ Three route registrations in `packages/cezar/src/server/server.ts`, beside the e
 | --- | --- |
 | `GET /manifest.webmanifest` | `staticFile('manifest.webmanifest', 'application/manifest+json')` |
 | `GET /cezar-logo.svg` | `staticFile('cezar-logo.svg', 'image/svg+xml')` |
-| `GET /icons/:file` | as `/assets/:file`, reusing `isSafeAssetFilename` and `assetContentType`, reading `web/dist/icons/`, **without** `ASSET_CACHE_CONTROL` |
+| `GET /icons/:file` | as `/assets/:file`, reusing `isSafeAssetFilename` and `assetContentType`, reading `web/dist/icons/`, requiring both `existsSync` and `statSync(...).isFile()`, **without** `ASSET_CACHE_CONTROL` |
 
-One param route rather than four literals keeps the guard surface to the one already written and
-unit-tested. `ASSET_TYPES` needs no new entry: `png` and `svg` are present, and the two literal
-routes name their own content type.
+One param route intentionally trades a single filename-validation surface for no registration churn
+when the icon set grows. Four literal routes would avoid a param guard but would require a route
+edit for every new file. Reuse the existing `isSafeAssetFilename` guard and the same
+`existsSync` plus `statSync(...).isFile()` check as `/assets/:file`. `ASSET_TYPES` needs no new entry:
+`png` and `svg` are present, and the two literal routes name their own content type.
 
 **`ASSET_CACHE_CONTROL` must not reach these routes.** The year-long immutable cache is correct only
 for Vite's fingerprinted `/assets/` filenames; these are stable names whose bytes change when the
@@ -217,7 +256,7 @@ neither sees them.
 ## Edge Cases & Failure Scenarios
 
 **No build (`web/dist` missing).** `staticFile` already answers 404 rather than crashing, and
-`/icons/:file` does the same via its `existsSync` check. A 404 manifest means the browser silently
+`/icons/:file` does the same via its `existsSync` plus `statSync(...).isFile()` check. A 404 manifest means the browser silently
 declines to offer an install; the shell route continues to serve its build-hint page. This is also
 the state of a fresh CI checkout, which constrains how these routes can be tested — see Phase 1
 step 5.
@@ -246,14 +285,19 @@ shape, state file or CLI flag changes. A browser that ignores all of it sees tod
 deleting the files and registrations returns it there exactly, and users who already installed keep
 a working app that falls back to the favicon.
 
-**The validation gate cannot see this feature, and it cannot even see the routes.** CI runs
-`npm run typecheck`, `npm run test:unit` and `npm test` *before* `npm run build`, and
+**The validation gate sees this feature in two stages.** CI runs `npm test` before `npm run build`, and
 `resolveWebDir()` is a private function hardcoded to `<pkg>/../../web` with no injection point. So in
-the unit suites `web/dist` does not exist and every one of these routes answers 404. A test asserting
-"200 and the right content-type" would fail; a test asserting "no `cache-control` header" would pass
-vacuously against that 404, which is worse. This is why no existing test asserts a 200 on
-`/open-mercato.svg`. The split the plan uses: pure functions and the missing-build 404 path in the
-unit suites, everything requiring bytes on disk in `npm run test:e2e`, which boots a built app.
+the unit suites `web/dist` does not exist and these routes answer 404; those suites cover the pure
+path decision, route table and missing-build behavior. The byte-level checks run after the build in
+`npm run test:package`, the configured CI gate. `npm run test:e2e` may provide browser evidence, but
+`.ai/scripts/e2e.sh` can skip when its environment is unavailable and it is not a correctness gate.
+
+The package checks must be explicit. `findPackGaps` should require the built manifest, cezar SVG and
+the Phase 1 PNG paths in addition to the shell and hashed assets. The packaged CLI test should also
+inspect `npm pack`'s reported file list for those exact paths, then fetch the installed app's
+manifest and icon from a real 200 response before asserting content types and the absence of
+`cache-control`; this keeps the header assertion from passing against a 404 and proves the files
+survive packaging.
 
 **The durable commitment.** `BACKWARD_COMPATIBILITY.md` §2 gains three paths, and §2 is a protected
 surface: once listed, moving or removing them is breaking. That is the intended bargain — an
@@ -276,14 +320,15 @@ independent of each other and of Phase 2, and either may ship in any order after
 
 ### Phase 1 — installable identity
 
-1. **Add the artwork.** Commit `packages/web/public/cezar-logo.svg` (source:
-   `/Users/maciejgren/Documents/cezar-logo.svg`, 176×176) and `icon-192.png`, `icon-512.png`,
+1. **Add the artwork.** Once the approved source artifact is reachable, commit
+   `packages/web/public/cezar-logo.svg` (176×176) and `icon-192.png`, `icon-512.png`,
    `icon-maskable-512.png` under `packages/web/public/icons/`. Add
    `packages/web/public/icons/README.md` recording that they are exported by hand from the SVG and
    must be re-exported when the mark changes.
-   *Verify:* a unit test reading each PNG's IHDR chunk (bytes 16–25, no dependency) and asserting
-   exact width, height, and colour type 6 (RGBA) — so a wrong-sized or accidentally-greyscale export
-   fails the build. Corner opacity is not machine-checked here; it is a manual check in step 8.
+   *Verify:* a unit test reading each PNG's IHDR chunk (bytes 16–25, no dependency) from
+   `packages/web/public/` and asserting exact width, height, and colour type 6 (RGBA) — so a
+   wrong-sized or accidentally-greyscale export fails the build. Corner opacity is not machine-checked
+   here; it is a manual check in step 8.
 2. **Write `packages/web/public/manifest.webmanifest`** with the contents above.
    *Verify:* a unit test `JSON.parse`s the file and asserts `id`, `name`, `short_name`, `start_url`,
    `scope`, `display`, and that the icon list contains a 192 and a 512 with `purpose: "any"` plus one
@@ -296,21 +341,28 @@ independent of each other and of Phase 2, and either may ship in any order after
 4. **Register the three routes in `server.ts`** per the table above.
    *Verify:* a unit test asserting the routes reached Hono's table (`app.routes` contains each path)
    and that `/icons/..` and `/icons/nope.png` answer 404 — both true without a build.
-5. **Assert the served bytes in the e2e suite.** In `packages/web/e2e/`, which boots a built app via
-   `.ai/scripts/e2e.sh`, assert 200 plus `application/manifest+json` for the manifest, 200 plus
-   `image/png` for `/icons/icon-192.png`, and that neither response carries `cache-control`.
-   *Verify:* the assertions run against a real 200, so the header-absence check is meaningful rather
-   than vacuous.
+5. **Assert the served bytes and package contents.** In the packaged CLI test under
+   `packages/cezar/test/e2e/` (or a sibling test in that directory), which is run by
+   `npm run test:package` after the build, require these exact tarball paths: `web/dist/manifest.webmanifest`,
+   `web/dist/cezar-logo.svg`, `web/dist/icons/icon-192.png`, `web/dist/icons/icon-512.png`, and
+   `web/dist/icons/icon-maskable-512.png`. Boot the installed package and assert 200 plus
+   `application/manifest+json` for the manifest, 200 plus `image/png` for `/icons/icon-192.png`,
+   and that neither response carries `cache-control`.
+   *Verify:* the assertions run against real 200 responses and the actual installed tarball, so both
+   the header-absence check and the packaging guarantee are meaningful. The optional browser script
+   may repeat the checks for exploratory evidence but is not the required gate.
 6. **Link the manifest** in `packages/web/index.html`:
    `<link rel="manifest" href="/manifest.webmanifest">`.
    *Verify:* an assertion over `index.html` that the link is present and its `href` is a served path.
 7. **Append the three paths to `BACKWARD_COMPATIBILITY.md` §2** in the static/GUI line.
-   *Verify:* extend `bc-route-inventory.test.ts`, which already reads the document from `REPO_ROOT`,
-   with one `expect(doc).toContain(path)` per new route — three lines that pin the commitment instead
-   of leaving §2 unchecked for static paths.
+   *Verify:* extend `bc-route-inventory.test.ts` to inspect the built app's `app.routes`, select the
+   dedicated protected non-API static routes (`/assets/:file`, `/open-mercato.svg`, and these three
+   paths), and require every selected route to be named in §2. Keep a non-vacuity assertion for the
+   selected route set. This must fail when a static route is added without inventory coverage; a
+   one-sided `doc.includes(path)` check alone is not enough.
 8. **Manual acceptance.** After `npm run build`, with the cockpit running: Chrome → Install page as
    app; confirm the app lands in `~/Applications/Chrome Apps` with the cezar mark, the Dock label
-   reads "cezar", the window opens without browser chrome, and the maskable icon shows no
+   reads "cezar", the window opens as an installed app with minimal browser UI, and the maskable icon shows no
    transparent corners under a circular mask (Chrome DevTools → Application → Manifest previews it).
 
 ### Phase 2 — Apple
@@ -344,11 +396,13 @@ independent of each other and of Phase 2, and either may ship in any order after
 
 15. **Add the meta tag and stamp it before first paint.** `<meta name="theme-color" content="#0d0d0d">`
     in the head, and one more statement in the existing pre-paint IIFE setting its `content` from the
-    `light` boolean it already computes. Extract that IIFE's decision into a testable function rather
-    than leaving it inline — nothing in the repo currently executes that script, so an inline-only
-    change is unverifiable.
-    *Verify:* a unit test over the extracted decision for `cez-theme` values `light`, `dark`,
-    `system` (both OS preferences) and an unrecognized value.
+    `light` boolean it already computes. Keep the decision inline: `theme.ts` deliberately documents
+    that the pre-paint script mirrors `resolveTheme` and `applyResolvedTheme`, and extracting it into
+    a module would defer the first-paint decision and still leave a separately executed copy to test.
+    *Verify:* a built-HTML test parses the generated `index.html`, runs the inline decision in a
+    minimal document harness for `cez-theme` values `light`, `dark`, `system` (both OS preferences)
+    and an unrecognized value, and asserts the stamped meta content. This test belongs to the
+    post-build package gate; it must not be replaced by a source-only string check.
 16. **Keep it in sync at runtime** in `packages/web/src/components/theme-provider.tsx`, beside the
     existing `applyResolvedTheme(root, resolved)` call — not inside that function, for the
     contract reason given in Architecture. Update index.html's "keep the two in sync" comment to name
