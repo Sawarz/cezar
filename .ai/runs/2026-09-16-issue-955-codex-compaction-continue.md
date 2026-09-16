@@ -105,33 +105,35 @@ betting on one:
 
 ## Progress
 
+PR: #1010
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Reproduce the sequence on the wire
 
-- [ ] 1.1 Extend the mock app-server with the compaction sequences
-- [ ] 1.2 Failing runner regressions for the compaction boundary
+- [x] 1.1 Extend the mock app-server with the compaction sequences — 71157592
+- [x] 1.2 Failing runner regressions for the compaction boundary — 71157592
 
 ### Phase 2: Carry the boundary through the runner/manager seam
 
-- [ ] 2.1 Additive `turn-end` reason in the v1 protocol + docs
-- [ ] 2.2 Detect the compaction boundary in CodexSession
+- [x] 2.1 Additive `turn-end` reason in the v1 protocol + docs — 71157592
+- [x] 2.2 Detect the compaction boundary in CodexSession — 71157592
 
 ### Phase 3: Make an async turn rejection authoritative
 
-- [ ] 3.1 Rejected turn/start|steer emits an authoritative error
-- [ ] 3.2 Runner regressions for both rejection paths
+- [x] 3.1 Rejected turn/start|steer emits an authoritative error — 71157592
+- [x] 3.2 Runner regressions for both rejection paths — 71157592
 
 ### Phase 4: One bounded continuation, at BOTH turn-end sites
 
-- [ ] 4.1 Nudge text, bound and ActiveRun state
-- [ ] 4.2 The shared tryCompactionContinue helper
-- [ ] 4.3 Wire runContinuation's turn-end
-- [ ] 4.4 Wire runAgentStep's turn-end and its auto-close gate
+- [x] 4.1 Nudge text, bound and ActiveRun state — 7df5186e
+- [x] 4.2 The shared tryCompactionContinue helper — 7df5186e
+- [x] 4.3 Wire runContinuation's turn-end — 7df5186e
+- [x] 4.4 Wire runAgentStep's turn-end and its auto-close gate — 7df5186e
 
 ### Phase 5: Regressions and the gate
 
-- [ ] 5.1 Working-not-waiting and the markerless control
-- [ ] 5.2 Marker precedence, cancellation, the bound and the #600 filter
-- [ ] 5.3 Rejected follow-up and the continuation site
-- [ ] 5.4 Red-without-fix proof and the full validation gate
+- [x] 5.1 Working-not-waiting and the markerless control — 2b205150
+- [x] 5.2 Marker precedence, cancellation, the bound and the #600 filter — 2b205150
+- [x] 5.3 Rejected follow-up and the continuation site — 2b205150
+- [x] 5.4 Red-without-fix proof and the full validation gate — 2b205150
