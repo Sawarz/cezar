@@ -82,6 +82,8 @@ genuinely failing (still `available: false`).
 
 ## Progress
 
+PR: #996
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: the server splits the call and tiers the checks
@@ -101,4 +103,4 @@ genuinely failing (still `available: false`).
 
 ### Phase 4: validation
 
-- [ ] 4.1 Full validation gate
+- [x] 4.1 Full validation gate — 3ca33514
