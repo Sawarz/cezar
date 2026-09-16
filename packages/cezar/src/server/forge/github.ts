@@ -494,6 +494,19 @@ function firstLine(s: string): string {
   return s.split('\n').find((l) => l.trim().length > 0)?.trim() ?? 'gh failed';
 }
 
+/**
+ * The line of a `gh` failure that says WHY, not just that it failed (#969).
+ *
+ * Node prefixes a failed subprocess with `Command failed: <the whole argv>` and puts the forge's
+ * own message on the lines after it. `firstLine` therefore reports the command back at the reader —
+ * which is how "your token cannot read check runs" came out looking like a GitHub outage. This
+ * skips that preamble whenever there is something behind it, and falls back to it when there isn't.
+ */
+export function whyLine(s: string): string {
+  const lines = s.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  return lines.find((l) => !/^Command failed:/i.test(l)) ?? lines[0] ?? 'gh failed';
+}
+
 // ---- search across states (#730) -------------------------------------------
 // `fetchGithub` above lists the OPEN set only (`gh issue/pr list` defaults to `--state open`),
 // and the tab's search is an in-memory filter over exactly that payload — so a closed or merged
@@ -2786,7 +2799,7 @@ async function fetchMergeChecks(
     const out = await gh(repoRoot, ['pr', 'view', String(number), '--json', 'statusCheckRollup']);
     return { tier: 'detailed', rollup: mergeChecksSchema.parse(JSON.parse(out)).statusCheckRollup ?? [] };
   } catch (error) {
-    const reason = firstLine(error instanceof Error ? error.message : String(error));
+    const reason = whyLine(error instanceof Error ? error.message : String(error));
     const runGraphql: GraphqlRunner = (query, variables) => {
       const args = ['api', 'graphql', '-f', `query=${query}`];
       for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
@@ -2884,7 +2897,10 @@ export async function fetchPrMergeState(
     mergeStateCache.set(key, { at: Date.now(), value });
     return value;
   } catch (error) {
-    return { available: false, reason: firstLine(error instanceof Error ? error.message : String(error)) };
+    // `whyLine`, not `firstLine`: a reason of "Command failed: gh pr view 353 --json …" is the
+    // command echoed back, and reads like an outage. The line after it says what actually went
+    // wrong (#969).
+    return { available: false, reason: whyLine(error instanceof Error ? error.message : String(error)) };
   }
 }
 
