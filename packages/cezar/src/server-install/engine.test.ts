@@ -90,6 +90,14 @@ describe('engine', () => {
     expect(res.status).toBe('complete');
   });
 
+  it('lets the platform\'s own preflight refuse first — a wrong OS is not reported as a port clash', async () => {
+    const strategy = strategyOf([fakeStep('a')]);
+    strategy.preflight = async () => {
+      throw new Error('this platform needs Ubuntu/Debian');
+    };
+    await expect(runInstall(strategy, opts({ portProbe: async () => false }))).rejects.toThrow(/Ubuntu/);
+  });
+
   it('a dry-run preview asserts nothing about the host\'s ports', async () => {
     const res = await runInstall(strategyOf([fakeStep('a')]), opts({ dryRun: true, portProbe: async () => false }));
     expect(res.status).toBe('complete');

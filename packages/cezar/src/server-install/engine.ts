@@ -182,13 +182,20 @@ export async function runInstall(strategy: PlatformStrategy, opts: RunOptions): 
     state.createdAt ??= opts.now;
     state.updatedAt = opts.now;
 
-    // The port is settled — nothing has rendered it yet. This is the one moment
-    // to refuse a port this install cannot own: every artifact downstream (the
-    // nginx `proxy_pass`, the unit's `--port`, the printed plan) is the same
-    // number, so a port held by someone else means a front end aimed at their
-    // process (#913). Only a first attempt is checked — on a resume or a
-    // reinstall the port is held by THIS instance's own service, which is not a
-    // conflict. A dry run touches no sockets and asserts nothing about the host.
+    await strategy.preflight(ctx); // throws PreflightError to refuse politely
+
+    // The port is settled and nothing has rendered it yet — the last moment to
+    // refuse one this install cannot own. Every artifact downstream is that same
+    // number (the nginx `proxy_pass`, the unit's `--port`, the printed plan), so
+    // a port somebody else holds means a front end aimed at THEIR process, which
+    // is how a second unix user ended up inside the first user's cockpit (#913).
+    //
+    // Only a first attempt is checked. Past that, the process on the port is
+    // usually this instance's own service, and refusing a resume the operator
+    // needs would be a worse failure than the narrow case it would catch (an
+    // install that died before it ever started a service, whose port was taken
+    // in the meantime — which still surfaces, loudly, at the "cezar is not
+    // answering on 127.0.0.1:<port>" wait). A dry run touches no sockets.
     if (!opts.dryRun && isFirstInstallAttempt(state)) {
       const conflict = await instancePortConflict(state.primaryPort, {
         instance: state.instance,
@@ -202,8 +209,6 @@ export async function runInstall(strategy: PlatformStrategy, opts: RunOptions): 
         );
       }
     }
-
-    await strategy.preflight(ctx); // throws PreflightError to refuse politely
 
     const steps = strategy.steps(ctx);
     const knownIds = new Set(steps.map((s) => s.id));
