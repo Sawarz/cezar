@@ -103,6 +103,8 @@ direction, would leave every existing case green.
 
 ## Progress
 
+PR: #1006
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Verify the premise
@@ -117,5 +119,5 @@ direction, would leave every existing case green.
 
 ### Phase 3: Validation and PR
 
-- [ ] 3.1 Run the full validation gate
-- [ ] 3.2 Finalize the PR body and labels
+- [x] 3.1 Run the full validation gate
+- [x] 3.2 Finalize the PR body and labels
