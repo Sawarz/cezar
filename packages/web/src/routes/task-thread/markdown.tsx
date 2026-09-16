@@ -95,11 +95,13 @@ const HARD_BREAKS = [...Object.values(defaultRemarkPlugins), remarkHardBreaks]
 
 /**
  * Transcript markdown is agent-influenceable. Browser-openable links stay live; local file paths
- * and other non-http destinations stay visible but inert so the SPA never turns `/Users/...` into
- * a bogus localhost route.
+ * and other non-http link destinations stay visible but inert so the SPA never turns `/Users/...`
+ * into a bogus localhost route. Non-link URL attributes keep Streamdown's default transform so
+ * local images remain visible (#431 — href protocol guard).
  */
 const markdownUrlTransform: UrlTransform = (url, key, node) => {
   const transformed = defaultUrlTransform(url, key, node)
+  if (key !== 'href') return transformed
   return isHttpUrl(transformed) ? transformed : undefined
 }
 

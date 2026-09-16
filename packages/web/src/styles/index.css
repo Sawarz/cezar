@@ -514,6 +514,7 @@
   color: var(--muted-foreground);
 }
 .thread-markdown a[data-streamdown='link']:not([href]) {
+  /* Local destinations are intentionally inert links (#431 — href protocol guard). */
   cursor: text;
   color: inherit;
   font-weight: inherit;
