@@ -2683,7 +2683,12 @@ export function normalizeMergeState(
   const checks: ForgePrCheck[] = (pr.statusCheckRollup ?? []).map((check) => ({
     name: check.name,
     state: mergeCheckState(check),
-    required: requirements.readable ? requirements.requiredChecks.includes(check.name) : null,
+    // An `aggregate` row stands for every check at once, required ones included, so its
+    // requiredness is unknowable — never `false`, which would read as "not required".
+    required:
+      checkTier.tier === 'aggregate' || !requirements.readable
+        ? null
+        : requirements.requiredChecks.includes(check.name),
     ...(check.detailsUrl?.startsWith('https://') || check.detailsUrl?.startsWith('http://')
       ? { url: check.detailsUrl }
       : {}),

@@ -3183,6 +3183,9 @@ describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
 
     if (!out.available) throw new Error('expected the merge state to survive');
     expect(out.mergeState.checks[0]?.state).toBe('failing');
+    // One row standing for every check, required ones included — requiredness is unknowable, and
+    // `false` would read as "not required" even with branch protection readable.
+    expect(out.mergeState.checks[0]?.required).toBeNull();
     expect(out.mergeState.eligibility).toBe('blocked');
     expect(out.mergeState.blockers.map((b) => b.code)).toContain('checks-failing');
     expect(out.mergeState.canMerge).toBe(false);

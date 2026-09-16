@@ -1058,8 +1058,10 @@ function GithubMergeBox({ number }: { number: number }) {
                 </span>
               </li>
             ) : null}
-            {/* `checks-unknown` is already said above, in more detail — don't say it twice. */}
-            {state.blockers.filter((blocker) => blocker.code !== 'checks-unknown').map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
+            {/* The row above already said `checks-unknown`, with the reason — don't say it twice. */}
+            {state.blockers
+              .filter((blocker) => !(blocker.code === 'checks-unknown' && state.checksTier === 'none'))
+              .map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
           </ul>
           {state.canOverride ? (
             <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
