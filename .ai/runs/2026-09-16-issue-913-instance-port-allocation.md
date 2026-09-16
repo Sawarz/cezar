@@ -98,6 +98,7 @@ PR: #1003
 ### Phase 4: Gate
 
 - [x] 4.1 Full validation gate, review pass, PR
+- [x] Post-review fix: the port check runs after `strategy.preflight()`, so a wrong-OS refusal is not reported as a port clash — 322dec5c
 
 ## Gate evidence
 
