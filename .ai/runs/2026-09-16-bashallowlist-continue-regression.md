@@ -101,6 +101,11 @@ direction, would leave every existing case green.
 - 3.1 Run the full `validation.commands` gate.
 - 3.2 Finalize the PR: body says `Fixes #877`, states the resolution path, labels applied.
 
+### Phase 4: Self-review follow-ups (om-auto-review-pr --autofix)
+
+- 4.1 Apply the three non-blocking review findings (ambient backend, `AgentRunResult`, optional `onEvent`).
+- 4.2 Re-prove red and re-run the full gate on the final code.
+
 ## Progress
 
 PR: #1006
@@ -119,5 +124,10 @@ PR: #1006
 
 ### Phase 3: Validation and PR
 
-- [x] 3.1 Run the full validation gate
-- [x] 3.2 Finalize the PR body and labels
+- [x] 3.1 Run the full validation gate — 1e5474ca
+- [x] 3.2 Finalize the PR body and labels — 1e5474ca
+
+### Phase 4: Self-review follow-ups (om-auto-review-pr --autofix)
+
+- [x] 4.1 Pin the backend, reuse `AgentRunResult`, match the optional `onEvent` — 3d75042c
+- [x] 4.2 Re-prove red and re-run the full gate on the final code — 3d75042c
