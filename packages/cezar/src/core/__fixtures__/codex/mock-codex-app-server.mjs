@@ -20,8 +20,9 @@ const rl = createInterface({ input: process.stdin });
  * the turn's LAST act is a completed `contextCompaction` item, then
  * `turn/completed`, with no assistant message after it. NO redacted Luna trace
  * was obtainable while this fixture was written, so it is built from the
- * documented wire contract (`AGENT_PROTOCOL.md` §5, the frames this mock
- * already speaks, and the item ordering in the reporter's screenshot) — and it
+ * documented wire contract (`agent-event-protocols.md` §3/§7.1 — the same source
+ * the mapper cites — the frames this mock already speaks, and the item ordering
+ * in the reporter's screenshot) — and it
  * scripts ALL THREE post-compaction follow-up shapes #955 enumerates as open
  * questions, so the chosen policy is pinned under every one of them rather than
  * betting on the unverified one:

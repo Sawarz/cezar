@@ -175,7 +175,11 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
     await session.result.catch(() => undefined);
   }, 20_000);
 
-  it('surfaces a refused turn/steer the same way', async () => {
+  it('reports a refused turn/steer WITHOUT killing the turn still in flight', async () => {
+    // The other half of the rule, and the reason it is not "escalate every rejection": a
+    // refused steer leaves no zombie — the turn is genuinely running and `running` is
+    // genuinely true. Escalating would interrupt it and throw away real work to report a
+    // problem the run does not have. What was lost is the follow-up, and the note says so.
     const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     let sawText: () => void = () => {};
@@ -194,11 +198,15 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
 
     expect(session.sendMessage([{ type: 'text', text: 'Continue' }])).toBe(true);
     await expect
-      .poll(() => events.some((e) => e.type === 'error'), { timeout: 10_000 })
+      .poll(() => events.some((e) => e.type === 'note' && e.message.includes('did not reach the model')), {
+        timeout: 10_000,
+      })
       .toBe(true);
-    expect(events.find((e) => e.type === 'error')).toMatchObject({
+    expect(events.find((e) => e.type === 'note' && e.message.includes('did not reach the model'))).toMatchObject({
       message: expect.stringContaining('expectedTurnId'),
     });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(session.open).toBe(true); // the live turn was NOT torn down
     session.end();
     await session.result.catch(() => undefined);
   }, 20_000);

@@ -304,8 +304,7 @@ class CodexSession implements AgentSession {
     void this.ready
       .then(() => this.startOrSteerTurn(text))
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        this.emit(this.asyncTurnFailure(`codex: turn failed: ${message}`));
+        this.emit(this.asyncTurnFailure(err instanceof Error ? err.message : String(err)));
       });
     return true;
   }
@@ -316,19 +315,36 @@ class CodexSession implements AgentSession {
    *
    * `sendMessage` answers `true` as soon as the frame is written, so
    * `RunManager.deliverMessage` has already cleared `waiting` and written `running` by the
-   * time the JSON-RPC response settles. As a `note` the rejection was invisible to the run
-   * lifecycle and the task sat there looking alive forever — the silent running zombie. An
-   * `error` is the SAME authority `turn/failed` already carries for the same class of
-   * event, and `RunManager` turns it into a visible failed run the user can act on.
+   * time the JSON-RPC response settles. When the rejection was a refused `turn/start` there
+   * is now NO turn at all, and as a mere `note` that state was invisible to the run
+   * lifecycle: the task sat at `running` forever with nothing running — the silent zombie.
+   * `error` is the SAME authority `turn/failed` already carries for the same class of event,
+   * and `RunManager` turns it into a visible failed run the user can act on.
    *
-   * The one exception is a failure cezar itself caused: once stdin is closed or we have
-   * signalled the child, every request still in flight is rejected by `rejectPending` as
-   * part of an ordinary teardown. Escalating those would make every cancel a failed run —
-   * the self-inflicted failure #703 removed — so they stay notes.
+   * Two failures deliberately stay notes, because neither leaves a zombie behind:
+   *
+   *  - a failure cezar itself caused. Once stdin is closed or we have signalled the child,
+   *    every request still in flight is rejected by `rejectPending` as part of an ordinary
+   *    teardown, and escalating those would make every cancel a failed run — the
+   *    self-inflicted failure #703 removed.
+   *  - a refused `turn/steer` while a turn is STILL LIVE. The session is demonstrably
+   *    working and `RunManager`'s `running` is simply true; what was lost is the follow-up,
+   *    not the run. Escalating would interrupt the turn in flight and throw away real work
+   *    to report a problem the run does not have. The note says the message did not land so
+   *    the user can resend it once the turn ends.
    */
-  private asyncTurnFailure(message: string): AgentEvent {
+  private asyncTurnFailure(detail: string): AgentEvent {
     const ourOwnTeardown = !this.stdinOpen || this.terminatedByCezar || this.timedOut;
-    return ourOwnTeardown ? { type: 'note', message } : { type: 'error', message };
+    if (!ourOwnTeardown && !this.activeTurnId) {
+      return { type: 'error', message: `codex: turn failed: ${detail}` };
+    }
+    if (this.activeTurnId && !ourOwnTeardown) {
+      return {
+        type: 'note',
+        message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
+      };
+    }
+    return { type: 'note', message: `codex: turn failed: ${detail}` };
   }
 
   end(): void {

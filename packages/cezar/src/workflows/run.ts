@@ -3462,7 +3462,10 @@ export class RunManager {
         // every runner that has no such signal, and on every recording written before the
         // field existed — which is exactly the pre-#955 behaviour.
         const compacted = event.reason === 'context-compaction';
-        const markerless = markerlessTurn(turnText);
+        // Computed here because `turnText` is cleared further down, and only when the
+        // boundary actually exists — on every ordinary turn the whole #955 path, this extra
+        // marker scan included, stays inert.
+        const markerless = compacted && markerlessTurn(turnText);
         // Any turn that did NOT end at a compaction boundary is the evidence the session is
         // working again, so the anti-spin budget is restored. Before the early returns below,
         // because a turn that finished or dispatched is progress too.
@@ -4249,7 +4252,7 @@ export class RunManager {
         // The twin of `runContinuation`'s read — see there for why the field is absent on
         // every runner and every recording that predates it (#955).
         const compacted = event.reason === 'context-compaction';
-        const markerless = markerlessTurn(turnText);
+        const markerless = compacted && markerlessTurn(turnText);
         if (!compacted) state.compactionContinues = 0;
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
