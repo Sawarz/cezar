@@ -2455,6 +2455,18 @@ describe('a context-compaction boundary keeps the run working (#955)', () => {
     expect(continuations(id)).toBe(0);
   }, 40_000);
 
+  it('a MALFORMED CEZ:ASK before the compaction still parks, so the question is not buried', async () => {
+    // The marker raises no ask card, so nothing downstream would show that a question was
+    // asked at all — continuing here would answer it on the user's behalf and lose it.
+    const id = start('mock:compaction-badask which database?');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    expect(continuations(id)).toBe(0);
+    expect(
+      eventsOf(id).some((e) => e.type === 'note' && e.message?.includes('CEZ:ASK payload is not valid JSON')),
+    ).toBe(true);
+  }, 40_000);
+
   it('bounds repeated compaction and then parks for the user', async () => {
     // The spin the bound exists for: every turn ends at a boundary and nothing progresses.
     const id = start('mock:compaction-repeat refactor the parser');

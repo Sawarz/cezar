@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
-  ASK_MARKER_RE,
   parseAskMarker,
   parseAskMarkerResult,
   stripAskMarker,
@@ -140,10 +139,12 @@ const MONITORING_MARKER_RE = /CEZ:MONITORING\s*$/;
  * context (#955). Not a user message: it never enters the transcript as one, and it is written
  * to be read by an agent that has just lost its working memory — so it points at the durable
  * state (the handoff file, the notes) rather than restating a task it can no longer see.
- * Exported so `scripts/mock-claude.mjs` can recognize it the way it recognizes the autonomous
- * nudge.
+ *
+ * Unlike `AUTONOMOUS_NUDGE` this is NOT exported for `scripts/mock-claude.mjs`: only a runner
+ * that can report a compaction boundary ever provokes it, and the dry-run claude mock is not
+ * one, so a `mock:` arm keyed on this text would be dead code.
  */
-export const COMPACTION_CONTINUE_NUDGE =
+const COMPACTION_CONTINUE_NUDGE =
   'Your context was automatically compacted, which ended your turn before the work was finished. Nothing is being asked of you. Re-read your handoff file and notes for where you got to, then carry on — and end the turn with CEZ:DONE, CEZ:ASK or CEZ:MONITORING when you genuinely need to stop.';
 /**
  * How many CONSECUTIVE compaction-ended turns cezar continues before it parks the run for the
@@ -262,9 +263,13 @@ function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
  */
 function markerlessTurn(turnText: string): boolean {
   const trimmed = turnText.trimEnd();
-  return (
-    !DONE_MARKER_RE.test(trimmed) && !MONITORING_MARKER_RE.test(trimmed) && !ASK_MARKER_RE.test(trimmed)
-  );
+  if (DONE_MARKER_RE.test(trimmed) || MONITORING_MARKER_RE.test(trimmed)) return false;
+  // `parseAskMarkerResult`, not `ASK_MARKER_RE`: the strict regex only matches a marker whose
+  // payload is a complete `{…}`, so `CEZ:ASK not-json` — a question the user still needs to
+  // see — would read as ordinary prose and authorize a continuation. The parser's looser
+  // `none` test is the right question here, and its known over-reach (an earlier PROSE mention
+  // of the keyword also counts as spoken) errs towards parking, which is today's behavior.
+  return parseAskMarkerResult(trimmed).kind === 'none';
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
