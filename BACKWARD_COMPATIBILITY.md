@@ -256,6 +256,13 @@ instruction rather than silently.
   behavior wholesale, which is what the "keep the old spelling for a minor release" rule exists to
   provide.
 
+## Reading width default (#976)
+
+The workspace migration cursor is now 2. Migration 002 is the compatibility
+path for the reading-width default: it removes the legacy workspace-owned
+appearance.width value narrow once, while preserving accent, density and
+unknown ui-state keys. It does not touch per-repo files.
+
 ## When in doubt
 
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.

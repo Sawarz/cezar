@@ -26,8 +26,8 @@ export type Accent = 'lime' | 'violet'
 export type Density = 'comfortable' | 'compact' | 'ultra'
 
 /** Reading width flips the one `--measure` token that caps the task-view column (index.css
- *  `:root[data-width="narrow"]`): `wide` is the zero-config full-width mode; `narrow` restores
- *  the old 820px reading column. Type size and spacing stay untouched. */
+ *  `:root[data-width="narrow"]`): `wide` is the legacy spelling for the zero-config full-width
+ *  mode; `narrow` restores the old 820px reading column. Type size and spacing stay untouched. */
 export type Width = 'narrow' | 'wide'
 
 export const DEFAULT_ACCENT: Accent = 'lime'
