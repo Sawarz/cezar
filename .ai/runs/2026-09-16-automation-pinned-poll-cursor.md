@@ -96,6 +96,8 @@ untouched ordinary path; then the full configured gate.
 
 ## Progress
 
+PR: #1002
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: a one-call poll budget override
@@ -114,7 +116,6 @@ untouched ordinary path; then the full configured gate.
 - [x] 3.1 Scheduler tests: the pinned fixed point, the ladder escaping it, the still-pinned-at-100 case not re-climbing, and an ordinary no-new-events poll unaffected — 5a62f2e3
 - [x] 3.2 Run the full validation gate and refresh the PR body — 5a62f2e3
 
-PR: #1002
 
 ### Gate (run with `TMPDIR=/tmp TMP=/tmp` and the run's `CEZ_*` vars unset — see below)
 
