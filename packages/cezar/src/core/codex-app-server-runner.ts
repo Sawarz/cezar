@@ -334,17 +334,17 @@ class CodexSession implements AgentSession {
    *    the user can resend it once the turn ends.
    */
   private asyncTurnFailure(detail: string): AgentEvent {
-    const ourOwnTeardown = !this.stdinOpen || this.terminatedByCezar || this.timedOut;
-    if (!ourOwnTeardown && !this.activeTurnId) {
-      return { type: 'error', message: `codex: turn failed: ${detail}` };
+    // Read in the order of the two exceptions above, then the rule.
+    if (!this.stdinOpen || this.terminatedByCezar || this.timedOut) {
+      return { type: 'note', message: `codex: turn failed: ${detail}` };
     }
-    if (this.activeTurnId && !ourOwnTeardown) {
+    if (this.activeTurnId) {
       return {
         type: 'note',
         message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
       };
     }
-    return { type: 'note', message: `codex: turn failed: ${detail}` };
+    return { type: 'error', message: `codex: turn failed: ${detail}` };
   }
 
   end(): void {
@@ -522,9 +522,10 @@ class CodexSession implements AgentSession {
         // tidying ITS context would colour the parent's turn boundary. The item itself is
         // mapped exactly as before, below: the "Compacted context" row is unchanged, and
         // this only adds lifecycle meaning alongside it.
-        if (type === 'contextCompaction' && !this.isForeignThreadTurn(params)) {
+        const ownThread = !this.isForeignThreadTurn(params);
+        if (ownThread && type === 'contextCompaction') {
           this.compactionEndedTurn = true;
-        } else if (type === 'agentMessage' && !this.isForeignThreadTurn(params)) {
+        } else if (ownThread && type === 'agentMessage') {
           // The model spoke AFTER compacting — that is a real handoff, not maintenance.
           this.compactionEndedTurn = false;
         }
