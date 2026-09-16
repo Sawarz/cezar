@@ -175,6 +175,8 @@ describe('ProjectAutomationScheduler — a saturated overlap band (#982)', () =>
       .toEqual([undefined, 50, 100]);
     const pinnedCursor = store.state(definition.id)?.pinnedCursor;
     expect(pinnedCursor).toEqual(band(150).at(-1));
+    // The marker has to survive the state file's own schema, not just the in-memory copy.
+    expect(AutomationStore.open(store.dataDir).state(definition.id)?.pinnedCursor).toEqual(pinnedCursor);
 
     poller.poll.mockClear();
     await scheduler.check(definition);
