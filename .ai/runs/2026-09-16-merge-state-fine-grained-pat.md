@@ -86,8 +86,8 @@ genuinely failing (still `available: false`).
 
 ### Phase 1: the server splits the call and tiers the checks
 
-- [ ] 1.1 Split the `gh pr view` call and fall back to the aggregate rollup
-- [ ] 1.2 Carry `checksTier` / `checksReason` through types, normalize and the contract
+- [x] 1.1 Split the `gh pr view` call and fall back to the aggregate rollup — 791f4e4e
+- [x] 1.2 Carry `checksTier` / `checksReason` through types, normalize and the contract — 791f4e4e
 
 ### Phase 2: tests for both token shapes
 
