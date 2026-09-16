@@ -91,8 +91,8 @@ genuinely failing (still `available: false`).
 
 ### Phase 2: tests for both token shapes
 
-- [ ] 2.1 Fine-grained-PAT shape: gh exit 1, empty stdout, panel survives
-- [ ] 2.2 Classic-token shape, both-unreadable shape, core-call failure
+- [x] 2.1 Fine-grained-PAT shape: gh exit 1, empty stdout, panel survives — b193bb14
+- [x] 2.2 Classic-token shape, both-unreadable shape, core-call failure — b193bb14
 
 ### Phase 3: the panel says what it cannot read
 
