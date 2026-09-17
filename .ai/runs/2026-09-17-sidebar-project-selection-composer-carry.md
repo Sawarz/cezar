@@ -119,6 +119,8 @@ selection affordance it never had.
 - [x] 1.2 Selecting a project expands its group and reads as selected — 750a869d
 - [x] 1.3 Unit tests for selection, disclosure and expand-on-select — 750a869d
 - [x] 1.4 Retarget the e2e disclosure helper and amend the sidebar spec — f4a68db1
+- [x] Post-review fix: select drops the stored collapse answer instead of pinning the group open (ten selected projects would otherwise mean ten expanded groups and ten runs requests) — ba9cf530
+- [x] Post-review fix: the project-name link is `aria-current="true"`, not `"page"` — it names the selected project, not the current page — ba9cf530
 
 ### Phase 2: The composition follows the project switch
 
