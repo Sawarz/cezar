@@ -115,10 +115,10 @@ selection affordance it never had.
 
 ### Phase 1: Selecting a project in the sidebar
 
-- [ ] 1.1 Split the group header into a chevron disclosure and a project-name select link
-- [ ] 1.2 Selecting a project expands its group and reads as selected
-- [ ] 1.3 Unit tests for selection, disclosure and expand-on-select
-- [ ] 1.4 Retarget the e2e disclosure helper and amend the sidebar spec
+- [x] 1.1 Split the group header into a chevron disclosure and a project-name select link — 750a869d
+- [x] 1.2 Selecting a project expands its group and reads as selected — 750a869d
+- [x] 1.3 Unit tests for selection, disclosure and expand-on-select — 750a869d
+- [x] 1.4 Retarget the e2e disclosure helper and amend the sidebar spec — f4a68db1
 
 ### Phase 2: The composition follows the project switch
 
