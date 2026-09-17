@@ -88,16 +88,21 @@ function useSidebarCollapse(activeProjectId: string | null) {
    * Selecting a project opens its group — a project cannot be the one you are standing in and
    * shut at the same time.
    *
-   * Writes an explicit `false` rather than deleting the entry, because the no-entry default
-   * ("the active project is open") is about to stop applying to whichever project you just left,
-   * and a group the user deliberately selected must not fall shut behind them when it does. A
-   * no-op when it is already pinned open, so selecting the same project twice costs no storage
-   * write and no re-render.
+   * DELETES the stored answer rather than writing an explicit `false`, and the difference is
+   * load-bearing. Pinning each selected group open would accumulate: click through ten projects
+   * and ten groups stay expanded forever, each one fetching its own runs list — exactly the
+   * "40-project workspace becomes an unusable scroll, one request per project" cost the
+   * no-entry default in `isProjectCollapsed` exists to avoid. Dropping the entry hands the
+   * group back to that default ("the project you are looking at is open, the rest are shut"),
+   * which opens it now because it is about to be the active one, and lets it fall shut again
+   * when the user moves on. A no-op when there was no stored answer to drop.
    */
   const expand = React.useCallback(
     (projectId: string) => {
-      if (latest.current[projectId] === false) return
-      write({ ...latest.current, [projectId]: false })
+      if (!(projectId in latest.current)) return
+      const next = { ...latest.current }
+      delete next[projectId]
+      write(next)
     },
     [write],
   )
@@ -554,7 +559,12 @@ function ProjectGroup({
             onSelect(project.id)
             onNavigate?.()
           }}
-          aria-current={active ? 'page' : undefined}
+          // `true`, not `page`: this link targets the project's tasks pane, which is not the
+          // page you are on when you are standing in its Git or Settings tab — and on the tasks
+          // pane itself the nav's own Tasks row already claims `page` for that exact href. What
+          // this row says is "this is the selected one of the projects", which is what
+          // `aria-current="true"` means.
+          aria-current={active ? 'true' : undefined}
           data-slot="project-group-header"
           className={cn(
             // 44px touch target in the drawer, the mockup's 34px row on desktop — the same

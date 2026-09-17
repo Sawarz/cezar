@@ -268,12 +268,16 @@ describe('the grouped multi-project sidebar', () => {
 
     // `/git` is a flat, project-agnostic route, so exactly one Git row may claim the URL — the
     // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked. The
-    // selected project's own name row (#1018) is current too, and leads: it is what says WHICH
-    // project you are standing in, which the sidebar could not say before.
+    // selected project's own name row is `aria-current="true"` rather than `page` (#1018): it
+    // says which project you are standing IN, not which page you are on.
     expect(
       browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-groups"] a[aria-current="page"]'))
         .map((a) => new URL(a.href).pathname)`)
-    ).toEqual([scoped(bootProject, '/'), scoped(bootProject, '/git')])
+    ).toEqual([scoped(bootProject, '/git')])
+    expect(
+      browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-groups"] a[aria-current="true"]'))
+        .map((a) => new URL(a.href).pathname)`)
+    ).toEqual([scoped(bootProject, '/')])
 
     // Each group's door into its own tasks pane.
     expect(

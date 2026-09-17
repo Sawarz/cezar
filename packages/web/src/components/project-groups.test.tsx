@@ -564,7 +564,7 @@ describe('ProjectGroups', () => {
     expect(group('cezar').hasAttribute('data-active')).toBe(false)
     // The selected project's own row says so — in the accessibility tree and with a marker that
     // does not collide with `hover:bg-muted`, which every row in this sidebar carries.
-    expect(header('shop').getAttribute('aria-current')).toBe('page')
+    expect(header('shop').getAttribute('aria-current')).toBe('true')
     expect(header('cezar').getAttribute('aria-current')).toBeNull()
     expect(group('shop').querySelector('[data-slot="project-group-selected"]')).not.toBeNull()
     expect(group('cezar').querySelector('[data-slot="project-group-selected"]')).toBeNull()
@@ -600,7 +600,7 @@ describe('ProjectGroups', () => {
       fireEvent.click(header('shop'))
       await waitFor(() => expect(group('shop').hasAttribute('data-active')).toBe(true))
       expect(group('cezar').hasAttribute('data-active')).toBe(false)
-      expect(header('shop').getAttribute('aria-current')).toBe('page')
+      expect(header('shop').getAttribute('aria-current')).toBe('true')
     })
 
     it('opens the group it selects, even one the user pinned shut', async () => {
@@ -615,7 +615,10 @@ describe('ProjectGroups', () => {
       fireEvent.click(header('shop'))
 
       await waitFor(() => expect(disclosure('shop').getAttribute('aria-expanded')).toBe('true'))
-      expect(storedCollapsed()).toEqual({ shop: false })
+      // The stored answer is DROPPED, not flipped to `false`: pinning every selected group open
+      // would leave a click-through of ten projects with ten expanded groups, each fetching its
+      // own runs list. Back on the default, this one is open because it is now the active one.
+      expect(storedCollapsed()).toEqual({})
     })
 
     it('costs the server nothing — selection is a route change, collapse is this browser’s', async () => {
