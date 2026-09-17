@@ -122,7 +122,7 @@ selection affordance it never had.
 
 ### Phase 2: The composition follows the project switch
 
-- [ ] 2.1 Per-project in-memory attachment store and the hand-off rule
-- [ ] 2.2 Wire `/new` to the controlled images seam and clear it on submit
-- [ ] 2.3 Hand the composition over on an explicit project pick
-- [ ] 2.4 Unit tests for the hand-off rule and the end-to-end swap
+- [x] 2.1 Per-project in-memory attachment store and the hand-off rule — 56ef4631
+- [x] 2.2 Wire `/new` to the controlled images seam and clear it on submit — 56ef4631
+- [x] 2.3 Hand the composition over on an explicit project pick — 56ef4631
+- [x] 2.4 Unit tests for the hand-off rule and the end-to-end swap — 56ef4631
