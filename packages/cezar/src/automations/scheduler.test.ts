@@ -233,6 +233,38 @@ describe('ProjectAutomationScheduler — a saturated overlap band (#982)', () =>
     expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
   });
 
+  it('climbs again after the operator narrows the filter the pinned log told them to narrow', async () => {
+    const { store, definition, scheduler } = await pinnedAt(band(150));
+    await scheduler.check(definition);
+    expect(store.state(definition.id)?.pinnedCursor).toEqual(band(150).at(-1));
+
+    // The remediation the `no-match` row prescribes: narrow the filter so the band stops saturating.
+    // 40 records still overrun the 25-record budget, so escaping it needs the ladder — which the
+    // marker would skip if an edit did not clear it.
+    const narrowed = store.update(definition.id, definition.revision, {
+      ...definition,
+      filters: { ...definition.filters, allLabels: ['grooming'] },
+    }) as GithubAutomationDefinition;
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+
+    const beyond = { timestamp: '2026-09-11T09:31:09.000Z', tieBreaker: 'beyond' };
+    const poller = fakePoller([...band(40), beyond]);
+    const narrowedScheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      timeZone: 'UTC',
+      store,
+      github: { owner: 'acme', repo: 'demo', poller: poller as never },
+      launch: async () => ({ runId: 'unused' }),
+    });
+
+    await narrowedScheduler.check(narrowed);
+
+    expect(poller.poll.mock.calls.map((call) => (call[3] as { maxRecords?: number }).maxRecords))
+      .toEqual([undefined, 50]);
+    expect(store.state(definition.id)?.cursor).toEqual(beyond);
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+  });
+
   it('leaves an ordinary no-new-events poll alone — one call, no marker', async () => {
     const { store, definition } = await setup();
     store.setState(definition.id, (current) => ({

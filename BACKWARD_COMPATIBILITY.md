@@ -315,7 +315,9 @@ config exception names it.
   and reads exactly as it did, and a consumer that ignores the key sees the old shape. The
   scheduler DELETES it once the cursor moves rather than writing a falsy marker, so a recovered
   automation's state is byte-identical to one that never stalled; `rebaselineIdleAutomations`
-  clears it alongside `frozenHighWatermark` and `backlogAfter`. An older cezar reading a newer
+  clears it alongside `frozenHighWatermark` and `backlogAfter`, and `AutomationStore.update`
+  clears it on every definition edit, since the marker only ever claimed the cursor was
+  unescapable under the definition that produced it. An older cezar reading a newer
   file drops the key and re-pays the widening climb every interval — the pre-#982 cost, not a
   parse failure. What DID change for a pinned automation is its poll **cost and log text**: one
   poll may now spend up to 100 records instead of `filters.maxRecords` — never more, because the
