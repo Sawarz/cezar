@@ -111,6 +111,8 @@ selection affordance it never had.
 
 ## Progress
 
+PR: #1018
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Selecting a project in the sidebar
