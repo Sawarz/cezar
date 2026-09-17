@@ -472,7 +472,20 @@ leading `projectId` segment.
   joins the drawer header.)
 - **Project groups** — one collapsible group per registered project, ordered by
   `lastOpenedAt`. Group header: chevron, project name, current branch,
-  attention badge (needs-you count). Expanded, a group shows:
+  attention badge (needs-you count). **Amended 2026-09-17 (#1018):** the header
+  is TWO sibling controls, not one. The chevron is the disclosure — it opens a
+  group so another project's task list can be read without leaving the page, and
+  it never navigates. The project NAME is a link into that project's own scope
+  (`/p/<id>/`), and clicking it is how a project becomes the active one. As first
+  built the header only disclosed, so expanding a group changed nothing about
+  which project was active: the sidebar painted no project as selected, and the
+  **New task** CTA — a `/new` link scoped through `project-router` — kept starting
+  tasks in whichever project the URL still named, with that project preselected in
+  the composer's project pill. Selecting also pins the group open (an explicit
+  `false` in the collapse map), because a project cannot be the one you are
+  standing in and shut at the same time; and the selected group carries a
+  primary-accent marker, since `bg-muted` alone cannot say "selected" in a sidebar
+  where every row is `hover:bg-muted`. Expanded, a group shows:
   - its nav — Tasks, Inbox (the existing `capabilities.followups`-gated item,
     omitted from the mockup), Git, GitHub (gated per project's forge),
     Skills, Workflows, Settings — each linking to `/p/<id>/…`;
