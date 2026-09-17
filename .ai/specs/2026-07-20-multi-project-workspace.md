@@ -516,6 +516,25 @@ own skills and settings), and submit posts to
 `POST /api/p/<selected>/runs`. The localStorage draft key becomes per-project
 (`cez-new-task-draft:<projectId>`) so switching projects doesn't leak drafts.
 
+**Amended 2026-09-17 (#1018): the composition follows an explicit switch.** The
+per-project keys stay, and so does what they are for — a half-typed task for the
+shop frontend must not SURFACE in the cezar composer. They were being applied to
+the one case they were never about: changing the project pill is not navigating
+away, it is deciding mid-sentence where the task you are writing belongs, and as
+built that decision silently discarded the prompt (re-read from the arriving
+project's key) and the pasted screenshots with it (`/new` left attachments to the
+composer's uncontrolled state, and the route remounts per project). Picking a
+different project now hands the text and the attachments over — a MOVE, so the
+composition still exists in exactly one project and the isolation invariant
+holds. Two guards: an arriving project that already holds its own unsent text
+keeps it, and the departing draft stays where it was (nothing is lost in either
+direction); and the pickers do not travel, because a skill ref is resolved
+against a project's own catalog and carrying `om-fix` into a project without it
+would replace a lost prompt with a silently wrong one. Attachments live in a
+module-level, per-project, IN-MEMORY map — the draft store's own reason for
+refusing them (four 5 MB images as base64 against a ~5 MB quota) is unchanged, and
+`/new` attachments still start empty on a real page load, exactly as before.
+
 ### Settings split (mockup: `settings-global.html`)
 
 - **Project settings** (`/p/<id>/settings/…`) — Agents, Resources→**Worktrees**
