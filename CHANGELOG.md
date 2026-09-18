@@ -1,3 +1,25 @@
+# Unreleased
+
+## 🔧 Changed
+- 🔧 Starting cezar in a folder only registers it while you have no projects yet — run it from a worktree or a scratch checkout as often as you like, and the list stays the one you curated, with the boot folder still fully usable and one click from being saved (`CEZ_SINGLE_PROJECT=1` deployments are exempt). (#774) *(@patzick)*
+
+## 🐛 Fixes
+- 🐛 A reply typed into a task that looks finished, but is running, now lands instead of bouncing back into the draft. (#986) *(@patzick)*
+- 🐛 Automations in the folder cezar is serving keep polling when that folder is not one of your saved projects, and saving it with **Add project** no longer splits its automations in two (fixes #872). (#774) *(@patzick)*
+- 🐛 A stale automation poll lock no longer silences every project's automations for ten minutes after the cockpit is killed mid-poll (fixes #983). (#993) *(@pat-lewczuk)*
+- 🐛 An OpenCode turn still working after five minutes no longer parks the run under "Needs you" (fixes #897). (#1005) *(@pat-lewczuk)*
+- 🐛 A provider authentication rejection re-probes before it sticks, instead of latching a red banner only **Try again** could clear. (#1014) *(@pat-lewczuk)*
+- 🐛 A dispatched task no longer gets an invented spend cap: the dispatch prompt says `--budget` is optional, so uncapped trees stay uncapped. (#1015) *(@patzick)*
+- 🐛 A server deploy fails when the service did not actually restart, instead of reporting a success that never happened (fixes #912). (#1009) *(@pat-lewczuk)*
+
+## 📝 Specs & Documentation
+- 📝 A shorter README with a demo video, a screenshot grid and mobile shots; the long reference sections move to `docs/reference.md`. (#1013) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @patzick
+
 # 0.11.0 (2026-09-15)
 
 ## Highlights
@@ -38,58 +60,6 @@ The cockpit learns to delegate: a running task may now dispatch other tasks with
 - @wojciechszyjka
 - @zawoj
 - @Damian-Szczepanski
-
-## 🔧 Changed
-
-- **Starting cezar in a folder only registers it while you have no projects yet.** The first run
-  still seeds the registry from the current repo, and booting a project you already have keeps
-  bumping it to the top of the sidebar — but once anything is registered, running `cezar` somewhere
-  else serves that folder without quietly adding it to your project list. Run it from a worktree or
-  a scratch checkout as often as you like; the list stays the one you curated. The folder you
-  started in is still fully usable: it leads the sidebar marked **not saved**, its tasks and panes
-  work exactly as a saved project's do, and both **Global settings → Projects** and the
-  project's own **Settings → General** show it as *not registered* with a one-click **Add project** —
-  the one place without Remove and a per-project task cap, because there is no registry entry to
-  edit. Adding is otherwise unchanged: `cezar projects add <dir>` or the **+** button.
-  `CEZ_SINGLE_PROJECT=1` deployments are exempt, since there the launch folder *is* the project.
-
-## 🐛 Fixes
-
-- 🐛 **Automations in the folder cezar is serving keep running when that folder is not one of your
-  saved projects.** The workspace scheduler compares its live handles against the project registry
-  and drops anything the registry does not name — which the folder you started cezar in is not,
-  now that starting somewhere new no longer registers it. Its automations stayed listed and
-  switched on in the cockpit while nothing polled GitHub for them, and nothing said so. The boot
-  project is now pinned against that sweep: cezar is demonstrably serving it, registered or not.
-  And saving that folder with **Add project** no longer splits its automations in two: the folder
-  briefly answered to both the boot alias and its new registry slug, which opened two independent
-  handles on one `.ai/cezar` — so switching an automation off in the cockpit left the copy the
-  scheduler polls untouched, and it went on launching runs until you restarted cezar. Automation
-  state is now keyed by folder, so a folder addressed twice is still one automation set, scheduled
-  once. Only affects deployments that opted into automations with `CEZ_AUTOMATIONS=1`. (#872)
-- 🐛 **A reply typed into a task that looks finished, but is running, now lands.** The thread reads
-  from two feeds — the run record for what the task *is*, the event stream for what it *said* — and
-  the record can go quietly out of date: a half-open workspace socket (TCP dead, `readyState` still
-  OPEN, so no error ever fires) stops delivering record updates while the transcript, which has had
-  its own liveness watchdog since #424, keeps flowing. Nothing else asked: the cockpit does not poll,
-  records stay fresh for five minutes, and window focus is deliberately not a refetch trigger — so
-  navigating to Tasks and back showed the same cached lie, and only a full page reload fixed it. A
-  task that had been continued or auto-resumed therefore sat there reading as done while it worked,
-  and the composer, aimed by that record at `POST /continue`, got "run is still active" back: the
-  prompt bounced into the draft with a toast, and re-sending it bounced again. Three changes, each
-  closing the hole at a different depth. The workspace stream gets the same watchdog the transcript
-  has — a silence spanning both data and the server's 15 s keep-alive is a dead socket, so it is
-  rebuilt and the reconnect reconciles everything missed. The thread's stale-record healer, which
-  already refetched a record still claiming `running` over a settled transcript, now works in the
-  other direction too: a session that has *opened* and not ended, under a record calling the run
-  done, refetches after the same two-second grace. And the composer no longer treats a 409 as the
-  end — it refetches the record authoritatively and, when the truth names the other endpoint,
-  delivers there instead, so the reply reaches the live session rather than the draft. A 409 the
-  fresh record agrees with (a disconnected provider, a session with nothing to resume) is still
-  reported as the server worded it, and an empty submit — the one-click Continue — is never turned
-  into an empty message. The run header's actions follow the same rule: a refused Continue or Cancel
-  refetches the record it was drawn from, so the bar redraws to the truth instead of offering the
-  same refusal. (#986)
 
 # 0.10.1 (2026-09-04)
 
