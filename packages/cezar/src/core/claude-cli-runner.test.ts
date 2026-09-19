@@ -54,16 +54,23 @@ describe('buildClaudeArgs systemPrompt', () => {
 describe('buildClaudeArgs approval gate', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 
-  it('denies unapproved tools without prompting by default', () => {
+  it('defaults to auto = dangerously-skip-permissions (full unrestricted)', () => {
     const args = buildClaudeArgs(spec, {});
-    const idx = args.indexOf('--permission-mode');
-    expect(args[idx + 1]).toBe('dontAsk');
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).not.toContain('--permission-mode');
   });
 
   it('enables Claude approval prompts only when explicitly requested', () => {
     const args = buildClaudeArgs(spec, { CEZ_APPROVAL_GATE: '1' });
     const idx = args.indexOf('--permission-mode');
     expect(args[idx + 1]).toBe('acceptEdits');
+  });
+
+  it('honours an explicit guarded permission mode', () => {
+    const args = buildClaudeArgs({ ...spec, permissions: { mode: 'guarded' } }, {});
+    const idx = args.indexOf('--permission-mode');
+    expect(args[idx + 1]).toBe('acceptEdits');
+    expect(args).not.toContain('--dangerously-skip-permissions');
   });
 });
 

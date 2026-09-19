@@ -64,8 +64,9 @@ Verified against the installed CLIs (2026-07-17) and vendor docs.
 ### Codex (`codex app-server`)
 
 - Two orthogonal knobs: `sandbox` = `read-only` | `workspace-write` |
-  `danger-full-access`; `approvalPolicy` = `untrusted` | `on-failure` |
-  `on-request` | `never`. No per-tool allowlist, no globs.
+  `danger-full-access`; `approvalPolicy` = `on-request` | `never` |
+  `{ granular: { … } }` (docs: `untrusted` retired, `on-failure` deprecated).
+  No per-tool allowlist, no globs.
 - Headless approval channel: per-item JSON-RPC requests
   (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`)
   that the client answers with an approve/deny response.
@@ -115,7 +116,7 @@ presets plus optional advanced rules:
 | `auto` *(default)* | Full permissions; run without asking | `bypassPermissions` / dangerously-skip permissions | `danger-full-access` + `never` | all permissions allowed |
 | `guarded` | Edits run; shell & network ask | `acceptEdits`, `Bash` moved from allowlist to `ask` | `workspace-write` + `on-request` | `edit: allow`, `bash: ask`, `webfetch: ask` |
 | `read-only` | Reads run; any change asks | `manual` + allowlist `Read,Grep,Glob`; writes/exec ask | `read-only` sandbox + `on-request` | `edit: ask`, `bash: ask` |
-| `manual` | Everything asks | `--permission-mode manual`, empty allowlist | `untrusted` | all tools `ask` |
+| `manual` | Everything asks | `--permission-mode default`, empty allowlist | `read-only` + granular approvals (all categories surface; `untrusted` retired) | all tools `ask` |
 
 Advanced rules (optional, on top of a preset): three lists — `allow`, `ask`,
 `deny` — of canonical `Tool` / `Tool(pattern)` specifiers (`Bash(git *)`,

@@ -15,6 +15,9 @@ import type {
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import { randomUUID } from 'node:crypto';
+import { translateClaudePermissions, type PermissionSpec } from './permission-map.ts';
+import { claudePermissionResponse } from './permission-prompt.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
@@ -115,6 +118,8 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    /** Pending `can_use_tool` requests awaiting a `control_response` (#475). */
+    const pendingPermissions = new Map<string, Record<string, unknown>>();
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -133,6 +138,26 @@ export class ClaudeCliRunner implements AgentRunner {
       }
     };
 
+    const writeStdin = (payload: unknown): boolean => {
+      if (!stdinOpen) return false;
+      try {
+        child.stdin.write(`${JSON.stringify(payload)}\n`);
+        return true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        onEvent?.({ type: 'note', message: `claude: stdin write failed: ${message}` });
+        return false;
+      }
+    };
+
+    // Declare control-protocol support so Claude routes approvals through
+    // `can_use_tool` instead of silently auto-denying (#475 Phase 1.10 / 2.1).
+    writeStdin({
+      type: 'control_request',
+      request_id: `cez-init-${randomUUID()}`,
+      request: { subtype: 'initialize' },
+    });
+
     const sendMessage = (content: ContentBlock[]): boolean => {
       if (!stdinOpen) return false;
       // A follow-up inside the reopen window cancels the scheduled close.
@@ -140,21 +165,28 @@ export class ClaudeCliRunner implements AgentRunner {
         clearTimeout(autoEndTimer);
         autoEndTimer = undefined;
       }
-      const line = JSON.stringify({
+      const ok = writeStdin({
         type: 'user',
         message: { role: 'user', content },
         session_id: spec.sessionId,
       });
-      try {
-        child.stdin.write(`${line}\n`);
+      if (ok) {
         // Each user message written to stdin begins a turn (§7.1).
         emitUi(claudeTurnStarted);
-        return true;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        onEvent?.({ type: 'note', message: `claude: stdin write failed: ${message}` });
-        return false;
       }
+      return ok;
+    };
+
+    const respondPermission = (requestId: string, optionId: string): boolean => {
+      if (!stdinOpen) return false;
+      const input = pendingPermissions.get(requestId);
+      if (input === undefined) return false;
+      pendingPermissions.delete(requestId);
+      const response = claudePermissionResponse(optionId, input);
+      return writeStdin({
+        type: 'control_response',
+        response: { subtype: 'success', request_id: requestId, response },
+      });
     };
 
     // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
@@ -249,6 +281,8 @@ export class ClaudeCliRunner implements AgentRunner {
           // Normalize only this precise wire shape so genuine result errors
           // (authentication, limits, malformed sessions) stay authoritative.
           const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
+          // Track pending can_use_tool so respondPermission can echo updatedInput.
+          trackPendingPermission(mappedMessage, pendingPermissions);
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
           let delta = 0;
@@ -335,6 +369,7 @@ export class ClaudeCliRunner implements AgentRunner {
       sendMessage,
       end,
       interrupt,
+      respondPermission,
       pid: child.pid,
       get open() {
         return stdinOpen;
@@ -345,26 +380,63 @@ export class ClaudeCliRunner implements AgentRunner {
   }
 }
 
+/** Remember a `can_use_tool` request's input so an allow answer can echo it. */
+export function trackPendingPermission(
+  msg: unknown,
+  pending: Map<string, Record<string, unknown>>,
+): void {
+  if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) return;
+  const record = msg as Record<string, unknown>;
+  if (record.type !== 'control_request' || typeof record.request_id !== 'string') return;
+  const request = record.request;
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) return;
+  const req = request as Record<string, unknown>;
+  if (req.subtype !== 'can_use_tool') return;
+  const input =
+    typeof req.input === 'object' && req.input !== null && !Array.isArray(req.input)
+      ? (req.input as Record<string, unknown>)
+      : {};
+  pending.set(record.request_id, input);
+}
+
 /**
  * Build the headless argv. `--input-format stream-json` reads user messages
- * from stdin; `--output-format stream-json --verbose` gives per-event NDJSON;
- * `--permission-mode dontAsk` keeps headless runs non-interactive: tools in
- * `--allowedTools` proceed and everything else is denied instead of prompting.
- * `CEZ_APPROVAL_GATE=1` opts back into Claude's approval UI (#435).
+ * from stdin; `--output-format stream-json --verbose` gives per-event NDJSON.
+ *
+ * Permission mode comes from `spec.permissions` (translated via
+ * `permission-map.ts`). Absent = `auto` = `--dangerously-skip-permissions`
+ * (full, unrestricted — matching the historical default and spec §auto).
+ * `CEZ_APPROVAL_GATE=1` overrides the mode to `acceptEdits` for the legacy
+ * approval-gate opt-in (#435); it takes precedence over `spec.permissions`.
  */
 export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
+  // Translate the permission spec (defaulting to `auto`).
+  const effectivePermSpec: PermissionSpec = spec.permissions ?? { mode: 'auto' };
+  // Legacy env override: CEZ_APPROVAL_GATE=1 forces acceptEdits regardless.
+  const permSpec: PermissionSpec =
+    env.CEZ_APPROVAL_GATE === '1' ? { mode: 'guarded' } : effectivePermSpec;
+  const perm = translateClaudePermissions(permSpec);
+
   const args: string[] = [
     '--input-format',
     'stream-json',
     '--output-format',
     'stream-json',
     '--verbose',
-    '--permission-mode',
-    env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
+
+  if (perm.dangerouslySkipPermissions) {
+    args.push('--dangerously-skip-permissions');
+  } else if (perm.permissionMode) {
+    args.push('--permission-mode', perm.permissionMode);
+  }
+
+  if (perm.settingsJson) {
+    args.push('--settings', perm.settingsJson);
+  }
   if (spec.systemPrompt) {
     args.push('--append-system-prompt', spec.systemPrompt);
   }
@@ -378,9 +450,14 @@ export function buildClaudeArgs(
       args.push('--session-id', spec.sessionId);
     }
   }
-  const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
-  if (allowed.length > 0) {
-    args.push('--allowedTools', allowed.join(','));
+  // Merge spec-level allowedTools with permission-level additionalAllowedTools.
+  const baseAllowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  const allAllowed = [...baseAllowed, ...perm.additionalAllowedTools];
+  if (allAllowed.length > 0) {
+    args.push('--allowedTools', allAllowed.join(','));
+  }
+  if (perm.disallowedTools.length > 0) {
+    args.push('--disallowedTools', perm.disallowedTools.join(','));
   }
   if (spec.model) {
     args.push('--model', spec.model);

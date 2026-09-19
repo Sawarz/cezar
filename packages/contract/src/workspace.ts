@@ -160,6 +160,9 @@ export const uiStateSchema = z.looseObject({
   lastWorktree: z.boolean().optional(),
   /** The last autonomous choice — remembered like `lastWorktree`. Absent → off. */
   lastAutonomous: z.boolean().optional(),
+  /** Last-used permission mode in the composer (spec 2026-07-17-permission-modes, #475).
+   *  Stored as a string to stay additive-safe when new modes are added. Absent → follow config. */
+  lastPermissionMode: z.string().optional(),
   /** Whether new runs should ask agents to append follow-up work. Absent → on. */
   lastGenerateFollowups: z.boolean().optional(),
   /** Skill selection frequency (#408): name → times chosen, across BOTH composers. */
@@ -352,6 +355,20 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
+  /** Permission mode (spec 2026-07-17-permission-modes, #475): null = no config key, treated
+   *  as `auto` (full, unrestricted access for all backends). */
+  permissions: z
+    .object({
+      mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
+      rules: z
+        .object({
+          allow: z.array(z.string()).optional(),
+          ask: z.array(z.string()).optional(),
+          deny: z.array(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .nullable(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -387,6 +404,20 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
+  /** null clears the key back to the default (`auto`). */
+  permissions: z
+    .object({
+      mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
+      rules: z
+        .object({
+          allow: z.array(z.string()).optional(),
+          ask: z.array(z.string()).optional(),
+          deny: z.array(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 

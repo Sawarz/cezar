@@ -105,6 +105,39 @@ const configSchema = z.object({
    * false preserves the ordinary per-runner model selector.
    */
   modelsLocked: z.boolean().optional().catch(undefined),
+  /**
+   * Global default permission mode for every agent run (spec 2026-07-17-permission-modes, #475).
+   * Four capability-named presets plus optional advanced per-tool rules.
+   *
+   * `.catch(undefined)` keeps the key additive-safe: a malformed value degrades
+   * to "no key" (treated as `auto`) without discarding the rest of the config.
+   */
+  permissions: z
+    .object({
+      /** The permission preset. Default `auto` = full, unrestricted access for all backends. */
+      mode: z.enum(['auto', 'guarded', 'read-only', 'manual']).default('auto'),
+      /** Optional advanced per-tool rules on top of the preset.
+       *  Use `Tool(pattern)` specifier syntax (e.g. `Bash(git *)`, `Edit`).
+       *  Each list capped at 100 entries, each entry at 200 chars. */
+      rules: z
+        .object({
+          allow: z
+            .array(z.string().max(200).regex(/^[A-Za-z][A-Za-z0-9_-]*(\(.+\))?$/))
+            .max(100)
+            .optional(),
+          ask: z
+            .array(z.string().max(200).regex(/^[A-Za-z][A-Za-z0-9_-]*(\(.+\))?$/))
+            .max(100)
+            .optional(),
+          deny: z
+            .array(z.string().max(200).regex(/^[A-Za-z][A-Za-z0-9_-]*(\(.+\))?$/))
+            .max(100)
+            .optional(),
+        })
+        .optional(),
+    })
+    .optional()
+    .catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;

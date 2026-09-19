@@ -210,6 +210,8 @@ export const runRecordSchema = z.object({
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
+  /** True while a live permission prompt is unanswered (#475). */
+  awaitingPermission: z.boolean().optional(),
   /** Exact ISO-8601 deadline for the next automatic monitoring check. */
   monitoringWakeAt: z.string().optional(),
   /** The current live monitoring epoch exhausted its 40 automatic checks. */
@@ -341,6 +343,8 @@ export const runIndexEntrySchema = z.object({
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
   status: runStatusSchema,
   activity: runActivitySchema.optional(),
+  /** True while a live permission prompt is unanswered (#475). Feeds `deriveAttention`. */
+  awaitingPermission: z.boolean().optional(),
   createdAt: z.string(),
   finishedAt: z.string().optional(),
   /** With `status`/`finishedAt`/`archived`, the four inputs `isUnread` reads — what lets the
@@ -909,6 +913,20 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    /** Per-task permission mode override (spec 2026-07-17-permission-modes, #475). Wins over the
+     *  config.json default. Absent = use the config default (or `auto`). */
+    permissions: z
+      .object({
+        mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
+        rules: z
+          .object({
+            allow: z.array(z.string()).optional(),
+            ask: z.array(z.string()).optional(),
+            deny: z.array(z.string()).optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   });
 
 /**
