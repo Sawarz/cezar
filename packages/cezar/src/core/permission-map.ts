@@ -35,12 +35,18 @@ export interface PermissionSpec {
 /**
  * Translated permission args for the Claude Code CLI.
  *
- * Preset mapping (Claude Code 2.x choices: acceptEdits | auto | bypassPermissions |
- * default | dontAsk | plan — the older `manual` value was removed):
- *  - auto       → `--dangerously-skip-permissions` (full, unrestricted)
+ * Preset mapping (Claude Code `--permission-mode` choices vary by CLI patch:
+ * 2.1.252 advertises `manual`; some builds list `default` instead of `manual`.
+ * Both mean "prompt for approval". `buildClaudeArgs` remaps to whichever the
+ * installed binary advertises):
+ *  - auto       → `--dangerously-skip-permissions` (explicit skip-all; NOT the
+ *                 zero-config default — absent spec keeps historical `dontAsk`)
  *  - guarded    → `--permission-mode acceptEdits`; Bash in ask via --settings
- *  - read-only  → `--permission-mode default` + allowlist Read,Grep,Glob; writes/exec ask
- *  - manual     → `--permission-mode default`, empty allowlist (everything prompts)
+ *  - read-only  → `--permission-mode manual` + allowlist Read,Grep,Glob
+ *  - manual     → `--permission-mode manual`, empty allowlist (everything prompts)
+ *
+ * Restrictive modes also require `--permission-prompt-tool stdio` so headless
+ * Claude emits `can_use_tool` instead of auto-denying.
  *
  * Advanced rules:
  *  - allow → `--allowedTools`
@@ -51,7 +57,9 @@ export interface ClaudePermissionArgs {
   /** Flag: use `--dangerously-skip-permissions` instead of `--permission-mode`. */
   dangerouslySkipPermissions: boolean;
   /** Value for `--permission-mode` (only set when `dangerouslySkipPermissions` is false). */
-  permissionMode?: 'acceptEdits' | 'default' | 'dontAsk' | 'auto' | 'bypassPermissions' | 'plan';
+  permissionMode?: 'acceptEdits' | 'manual' | 'default' | 'dontAsk' | 'auto' | 'bypassPermissions' | 'plan';
+  /** When true, spawn with `--permission-prompt-tool stdio` so `can_use_tool` is routed to us. */
+  permissionPromptToolStdio: boolean;
   /** Additional tools to add to `--allowedTools` (merged with spec.allowedTools). */
   additionalAllowedTools: string[];
   /** Tools to add to `--disallowedTools`. */
@@ -77,13 +85,14 @@ export function translateClaudePermissions(spec: PermissionSpec): ClaudePermissi
       presetAsk = ['Bash'];
       break;
     case 'read-only':
-      // `default` is Claude's prompt-for-approval mode (replaces the retired `manual`).
-      permissionMode = 'default';
+      // Prompt-for-approval. Canonical advertised name is `manual`; some CLIs
+      // list `default` instead — remapped at spawn.
+      permissionMode = 'manual';
       additionalAllowedTools = ['Read', 'Grep', 'Glob'];
       presetAsk = ['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch'];
       break;
     case 'manual':
-      permissionMode = 'default';
+      permissionMode = 'manual';
       presetAsk = ['Bash', 'Edit', 'Write', 'Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch'];
       break;
   }
@@ -103,7 +112,89 @@ export function translateClaudePermissions(spec: PermissionSpec): ClaudePermissi
     additionalAllowedTools,
     disallowedTools,
     settingsJson,
+    permissionPromptToolStdio: !dangerouslySkipPermissions,
   };
+}
+
+const CLAUDE_PERMISSION_MODE_NAMES = [
+  'acceptEdits',
+  'auto',
+  'bypassPermissions',
+  'manual',
+  'dontAsk',
+  'plan',
+  'default',
+] as const;
+
+/** Parse `--permission-mode` choices out of `claude --help` / the invalid-arg error. */
+export function parseClaudePermissionModeChoices(text: string): Set<string> {
+  const into = new Set<string>();
+  const block = /permission-mode[\s\S]{0,400}?(?:choices are |choices:\s*)([^\n]+)/i.exec(text);
+  const haystack = block?.[1] ?? text;
+  for (const name of CLAUDE_PERMISSION_MODE_NAMES) {
+    if (haystack.includes(name)) into.add(name);
+  }
+  return into;
+}
+
+/**
+ * `manual` (advertised on 2.1.252) and `default` (some other 2.x builds) are
+ * the same prompt-for-approval mode under two names. Pick the one this binary
+ * lists; if the probe returned nothing, keep the canonical `manual`.
+ */
+export function remapClaudePermissionMode(
+  mode: NonNullable<ClaudePermissionArgs['permissionMode']>,
+  advertised: Set<string>,
+): NonNullable<ClaudePermissionArgs['permissionMode']> {
+  if (mode !== 'manual' && mode !== 'default') return mode;
+  if (advertised.size === 0) return mode;
+  if (advertised.has(mode)) return mode;
+  if (mode === 'manual' && advertised.has('default')) return 'default';
+  if (mode === 'default' && advertised.has('manual')) return 'manual';
+  return mode;
+}
+
+/** Union two rule lists, preserving order and dropping duplicates. */
+function unionRuleList(base?: string[], extra?: string[]): string[] | undefined {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of [...(base ?? []), ...(extra ?? [])]) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+export function mergePermissionRules(
+  base?: PermissionRules,
+  extra?: PermissionRules,
+): PermissionRules | undefined {
+  if (!base && !extra) return undefined;
+  const allow = unionRuleList(base?.allow, extra?.allow);
+  const ask = unionRuleList(base?.ask, extra?.ask);
+  const deny = unionRuleList(base?.deny, extra?.deny);
+  if (!allow && !ask && !deny) return undefined;
+  return {
+    ...(allow ? { allow } : {}),
+    ...(ask ? { ask } : {}),
+    ...(deny ? { deny } : {}),
+  };
+}
+
+/**
+ * Per-task override supplies the mode; configured rules always ride along.
+ * Either side missing → the other; both missing → `undefined` (historical
+ * zero-config posture, not skip-all).
+ */
+export function mergePermissionSpecs(
+  override: PermissionSpec | undefined,
+  fallback: PermissionSpec | undefined,
+): PermissionSpec | undefined {
+  if (!override) return fallback;
+  if (!fallback) return override;
+  const rules = mergePermissionRules(fallback.rules, override.rules);
+  return { mode: override.mode, ...(rules ? { rules } : {}) };
 }
 
 // ---- Codex translation -----------------------------------------------------

@@ -14,7 +14,7 @@ import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } 
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
-import type { PermissionMode, PermissionSpec } from '../core/permission-map.ts';
+import { mergePermissionSpecs, type PermissionMode, type PermissionSpec } from '../core/permission-map.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -562,8 +562,9 @@ export interface StartRunInput {
   dispatchIntent?: DispatchIntent;
   /**
    * Permission mode for this run (spec 2026-07-17-permission-modes, #475).
-   * Per-task override; wins over the `config.json` default. Absent = use the
-   * config default, or `auto` if the config also has nothing set.
+   * Per-task override; merged with `config.json` (mode from the override, rules
+   * unioned). Absent = config, or the historical zero-config posture when
+   * config also has nothing set — never implicit skip-all.
    */
   permissions?: PermissionSpec;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
@@ -1191,8 +1192,9 @@ export class RunManager {
       // session Git routes can distinguish it from a removed isolated worktree.
       worktree: !group && !input.dispatchIntent && input.worktree === false ? false : undefined,
       // Persist the per-task permission override for display and resume (#475).
-      // Only the mode is stored; rules are applied at execute time.
-      ...(input.permissions ? { permissions: { mode: input.permissions.mode } } : {}),
+      ...(input.permissions
+        ? { permissions: { mode: input.permissions.mode, ...(input.permissions.rules ? { rules: input.permissions.rules } : {}) } }
+        : {}),
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
@@ -3677,6 +3679,13 @@ export class RunManager {
     const contextualOpeningPrompt = portableContext
       ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
+    const continueConfig = await loadConfig(this.repoRoot);
+    const continuePermissions: PermissionSpec | undefined = record?.permissions?.mode
+      ? {
+          mode: record.permissions.mode as PermissionMode,
+          ...(record.permissions.rules ? { rules: record.permissions.rules } : {}),
+        }
+      : continueConfig.permissions;
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -3705,8 +3714,9 @@ export class RunManager {
         model: continueModel,
         sessionId,
         resume: sessionId !== undefined,
-        // Permission mode from the record snapshot (spec 2026-07-17-permission-modes, #475).
-        ...(record?.permissions?.mode ? { permissions: { mode: record.permissions.mode as PermissionMode } } : {}),
+        // Snapshot from the run if it has one; otherwise the live config default.
+        // Never fall through to skip-all — a pre-#475 record has no key.
+        ...(continuePermissions ? { permissions: continuePermissions } : {}),
         timeoutMs: 0,
       },
       onEvent,
@@ -3783,8 +3793,9 @@ export class RunManager {
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
     // the record so the UI/API can show what the run actually used.
     const extraSystemPrompt = resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt);
-    // Effective permissions: per-task override wins over the config default; absent = auto.
-    const effectivePermissions = input.permissions ?? config.permissions ?? { mode: 'auto' as const };
+    // Per-task override supplies the mode; config rules always merge in. Absent both =
+    // historical zero-config posture (not skip-all).
+    const effectivePermissions = mergePermissionSpecs(input.permissions, config.permissions);
     // Canonical provider/model identity (#405) — the normalised `provider/model`
     // the task ran with, persisted for cost attribution / reproducible replay
     // beside the free-text `model`. Best-effort here (a per-step `runner`/`model`
@@ -3807,8 +3818,9 @@ export class RunManager {
       runner: taskBackend,
       systemPrompt: extraSystemPrompt,
       modelIdentity,
-      // Snapshot just the mode (not rules) for display in the run header.
-      permissions: { mode: effectivePermissions.mode },
+      permissions: effectivePermissions
+        ? { mode: effectivePermissions.mode, ...(effectivePermissions.rules ? { rules: effectivePermissions.rules } : {}) }
+        : undefined,
     });
     emit({ type: 'lifecycle', message: `run started — workflow "${workflow.name}" (runner: ${taskBackend})` });
 
@@ -4494,8 +4506,8 @@ export class RunManager {
           env: stepProfile.env,
           model: backendModel,
           sessionId,
-          // Permission mode for this step (spec 2026-07-17-permission-modes, #475).
-          permissions: permissions ?? { mode: 'auto' },
+          // Permission mode for this step. `undefined` = historical Claude dontAsk.
+          ...(permissions ? { permissions } : {}),
           // Interactive sessions have no wall clock — the idle timer rules.
           //
           // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)

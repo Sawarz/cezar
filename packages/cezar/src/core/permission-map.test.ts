@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  mergePermissionSpecs,
+  remapClaudePermissionMode,
   translateClaudePermissions,
   translateCodexPermissions,
   translateOpencodePermissions,
@@ -23,18 +25,20 @@ describe('translateClaudePermissions', () => {
     expect(out.settingsJson).toBe(JSON.stringify({ permissions: { ask: ['Bash'] } }));
   });
 
-  it('read-only → default + Read/Grep/Glob allowlist (Claude retired `manual`)', () => {
+  it('read-only → manual + Read/Grep/Glob allowlist (prompt mode; remapped to `default` on CLIs that dropped `manual`)', () => {
     const out = translateClaudePermissions({ mode: 'read-only' });
-    expect(out.permissionMode).toBe('default');
+    expect(out.permissionMode).toBe('manual');
     expect(out.additionalAllowedTools).toEqual(['Read', 'Grep', 'Glob']);
     expect(out.settingsJson).toContain('Bash');
+    expect(out.permissionPromptToolStdio).toBe(true);
   });
 
-  it('manual → default with empty allowlist (everything prompts)', () => {
+  it('manual → manual with empty allowlist (everything prompts)', () => {
     const out = translateClaudePermissions({ mode: 'manual' });
-    expect(out.permissionMode).toBe('default');
+    expect(out.permissionMode).toBe('manual');
     expect(out.additionalAllowedTools).toEqual([]);
     expect(out.dangerouslySkipPermissions).toBe(false);
+    expect(out.permissionPromptToolStdio).toBe(true);
   });
 
   it('merges advanced allow/deny/ask rules', () => {
@@ -49,6 +53,35 @@ describe('translateClaudePermissions', () => {
     expect(out.additionalAllowedTools).toEqual(['Bash(git *)']);
     expect(out.disallowedTools).toEqual(['Bash(rm *)']);
     expect(out.settingsJson).toBe(JSON.stringify({ permissions: { ask: ['Bash', 'WebFetch'] } }));
+  });
+});
+
+describe('remapClaudePermissionMode', () => {
+  it('keeps manual when the CLI advertises it', () => {
+    expect(remapClaudePermissionMode('manual', new Set(['manual', 'acceptEdits']))).toBe('manual');
+  });
+
+  it('rewrites manual → default when the CLI only lists default', () => {
+    expect(
+      remapClaudePermissionMode(
+        'manual',
+        new Set(['acceptEdits', 'auto', 'bypassPermissions', 'default', 'dontAsk', 'plan']),
+      ),
+    ).toBe('default');
+  });
+});
+
+describe('mergePermissionSpecs', () => {
+  it('keeps config deny rules when a per-task mode override has no rules', () => {
+    const merged = mergePermissionSpecs(
+      { mode: 'read-only' },
+      { mode: 'auto', rules: { deny: ['Bash(rm *)'] } },
+    );
+    expect(merged).toEqual({ mode: 'read-only', rules: { deny: ['Bash(rm *)'] } });
+  });
+
+  it('returns undefined when both sides are absent (historical default, not auto)', () => {
+    expect(mergePermissionSpecs(undefined, undefined)).toBeUndefined();
   });
 });
 

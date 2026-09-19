@@ -5,6 +5,11 @@
 
 export type PermissionMode = 'auto' | 'guarded' | 'read-only' | 'manual'
 
+/** Composer/Settings choice including the unset historical workspace default. */
+export type PermissionChoice = PermissionMode | 'default'
+
+export const PERMISSION_SPECIFIER_RE = /^[A-Za-z][A-Za-z0-9_-]*(\(.+\))?$/
+
 export const PERMISSION_MODES: ReadonlyArray<{
   id: PermissionMode
   label: string
@@ -15,7 +20,7 @@ export const PERMISSION_MODES: ReadonlyArray<{
   {
     id: 'auto',
     label: 'Auto',
-    desc: 'Run without asking — the agent edits files and runs commands on its own (default).',
+    desc: 'Full unrestricted access — skip every permission check. Opt-in; not the zero-config default.',
     askWhat: '',
   },
   {
@@ -38,7 +43,15 @@ export const PERMISSION_MODES: ReadonlyArray<{
   },
 ]
 
-export function permissionModeLabel(mode: PermissionMode): string {
+export const DEFAULT_PERMISSION_PRESET = {
+  id: 'default' as const,
+  label: 'Default',
+  desc: 'Historical workspace posture: Claude coding tools run, anything else is denied without asking. Codex and OpenCode stay unrestricted.',
+  askWhat: '',
+}
+
+export function permissionModeLabel(mode: PermissionChoice): string {
+  if (mode === 'default') return DEFAULT_PERMISSION_PRESET.label
   return PERMISSION_MODES.find((m) => m.id === mode)?.label ?? mode
 }
 
@@ -46,13 +59,19 @@ export function isPermissionMode(value: string): value is PermissionMode {
   return PERMISSION_MODES.some((m) => m.id === value)
 }
 
-/** Parse one-specifiers-per-line textareas into rule arrays (empty → undefined). */
-export function parsePermissionRulesText(text: string): string[] | undefined {
-  const lines = text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  return lines.length > 0 ? lines : undefined
+export function isPermissionChoice(value: string): value is PermissionChoice {
+  return value === 'default' || isPermissionMode(value)
+}
+
+/** Parse one-specifiers-per-line textareas. Illegal lines are returned separately so Save can refuse. */
+export function parsePermissionRulesText(text: string): { rules?: string[]; invalid: string[] } {
+  const rules: string[] = []
+  const invalid: string[] = []
+  for (const line of text.split('\n').map((item) => item.trim()).filter(Boolean)) {
+    if (line.length <= 200 && PERMISSION_SPECIFIER_RE.test(line)) rules.push(line)
+    else invalid.push(line)
+  }
+  return { rules: rules.length > 0 ? rules : undefined, invalid }
 }
 
 export function formatPermissionRulesText(rules: string[] | undefined): string {

@@ -12,7 +12,7 @@ import type {
 import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { translateCodexPermissions, type PermissionSpec } from './permission-map.ts';
 import {
-  PERMISSION_OPTIONS_WITH_ALWAYS,
+  PERMISSION_OPTIONS_CODEX,
   codexApprovalDecision,
   permissionTitle,
 } from './permission-prompt.ts';
@@ -452,7 +452,7 @@ class CodexSession implements AgentSession {
       requestId,
       ...(itemId !== undefined ? { itemId } : {}),
       title: permissionTitle(toolName, input),
-      options: [...PERMISSION_OPTIONS_WITH_ALWAYS],
+      options: [...PERMISSION_OPTIONS_CODEX],
     });
   }
 

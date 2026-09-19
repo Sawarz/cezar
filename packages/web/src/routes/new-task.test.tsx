@@ -150,7 +150,7 @@ const CONFIG: ConfigResponse = {
   worktreeRetention: 10,
   liveTitleUpdates: null,
   reviewGate: null,
-    permissions: null,
+  permissions: null,
 }
 
 const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
@@ -449,10 +449,8 @@ describe('picker data flows', () => {
     expect(options.some((option) => option.textContent?.includes('opencode'))).toBe(false)
   })
 
-  it('can pick Auto after a remembered non-auto lastPermissionMode (#475)', async () => {
-    // Regression: clearing draft to null when Auto matched Settings let remembered
-    // guarded/manual win again, so the Auto radio appeared stuck.
-    serve({ uiState: { lastPermissionMode: 'guarded' } })
+  it('can pick Auto after a configured non-auto default (#475)', async () => {
+    serve({ config: { permissions: { mode: 'guarded' } } })
     renderNewTask()
     await pillReady()
 
@@ -983,7 +981,6 @@ describe('submit', () => {
         // The run also lands at the head of the recency list (picker sort)...
         recentSources: [{ source: 'skill', ref: 'om-fix' }],
         lastGenerateFollowups: true,
-        lastPermissionMode: 'auto',
         // ...and bumps its usage count for the #408 frequency sort (a workflow source would
         // NOT carry a skillUsage key at all — see the WORKFLOW test below).
         skillUsage: { 'om-fix': 1 },
@@ -1039,7 +1036,6 @@ describe('submit', () => {
         lastTask: null,
         // Nothing was picked, so nothing joins the recency list or the frequency map.
         lastGenerateFollowups: true,
-        lastPermissionMode: 'auto',
       }),
     )
   })

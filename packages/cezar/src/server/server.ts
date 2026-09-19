@@ -45,6 +45,7 @@ import {
   attachmentInputSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
+  permissionSpecSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
@@ -660,19 +661,9 @@ const startRunSchema = z
     // off: the task itself is still perfectly valid as an ordinary run.
     dispatch: dispatchIntentSchema.optional(),
     // Per-task permission mode override (spec 2026-07-17-permission-modes, #475).
-    // Wins over the config.json default. Absent = use the config default (or `auto`).
-    permissions: z
-      .object({
-        mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
-        rules: z
-          .object({
-            allow: z.array(z.string()).optional(),
-            ask: z.array(z.string()).optional(),
-            deny: z.array(z.string()).optional(),
-          })
-          .optional(),
-      })
-      .optional(),
+    // Merged with the config default (mode from the body; rules unioned). Absent = config
+    // or the historical zero-config posture.
+    permissions: permissionSpecSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -4022,7 +4013,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(
         z.object({
           id: z.string().min(1),
-          requestId: z.string().regex(/^[A-Za-z0-9._-]+$/, 'invalid requestId'),
+          requestId: z.string().min(1).max(200).regex(/^[^\s/]+$/, 'invalid requestId'),
         }),
         { message: 'invalid requestId' },
       ),
@@ -5713,20 +5704,9 @@ export function createApp(deps: ServerDeps) {
     // back to the env-default behavior (OFF).
     reviewGate: z.boolean().nullable().optional(),
     // Permission mode (spec 2026-07-17-permission-modes, #475): null clears the key
-    // back to the default (`auto`). Same shape as the config key.
-    permissions: z
-      .object({
-        mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
-        rules: z
-          .object({
-            allow: z.array(z.string()).optional(),
-            ask: z.array(z.string()).optional(),
-            deny: z.array(z.string()).optional(),
-          })
-          .optional(),
-      })
-      .nullable()
-      .optional(),
+    // back to the historical workspace default. Same shape as the config key; rules
+    // use the specifier regex so a bad line 400s instead of fail-opening.
+    permissions: permissionSpecSchema.nullable().optional(),
   });
   const setAgentConfigSchema = z.object({
     content: z.string().max(2_000_000),

@@ -28,7 +28,7 @@ export const PERMISSION_OPTIONS_WITH_ALWAYS: readonly PermissionOption[] = [
 ];
 
 /** OpenCode's reply surface: once / always / reject (no reject_always). */
-export const PERMISSION_OPTIONS_OPENCODE: readonly PermissionOption[] = [
+export const PERMISSION_OPTIONS_CODEX: readonly PermissionOption[] = [
   OPTION.allow_once,
   OPTION.allow_always,
   OPTION.reject_once,

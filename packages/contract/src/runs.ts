@@ -8,6 +8,7 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
+import { permissionSpecSchema } from './permissions.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -913,20 +914,10 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
-    /** Per-task permission mode override (spec 2026-07-17-permission-modes, #475). Wins over the
-     *  config.json default. Absent = use the config default (or `auto`). */
-    permissions: z
-      .object({
-        mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
-        rules: z
-          .object({
-            allow: z.array(z.string()).optional(),
-            ask: z.array(z.string()).optional(),
-            deny: z.array(z.string()).optional(),
-          })
-          .optional(),
-      })
-      .optional(),
+    /** Per-task permission mode override (spec 2026-07-17-permission-modes, #475). Merged with
+     *  the config.json default (mode from the body, rules unioned). Absent = config, or the
+     *  historical zero-config posture when config has no key. */
+    permissions: permissionSpecSchema.optional(),
   });
 
 /**

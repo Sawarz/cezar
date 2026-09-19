@@ -177,13 +177,23 @@ export const runRecordSchema = z.object({
    *  autonomous. Set at creation from `WorkflowInput.autonomous`. */
   autonomous: z.boolean().optional(),
   /**
-   * Permission mode snapshot (spec 2026-07-17-permission-modes, #475): the mode
-   * the run actually started with, for display in the run header.
-   * Only `mode` is persisted (not rules) — the display tier never needs the full
-   * rule set, and rules may contain user-specific tool patterns.
-   * Optional and additive: absent on all pre-#475 runs (treated as `auto`).
+   * Permission mode snapshot (spec 2026-07-17-permission-modes, #475): the
+   * effective spec the run started with (mode + rules), for display and resume.
+   * Optional and additive: absent on all pre-#475 runs (historical posture, not skip-all).
    */
-  permissions: z.object({ mode: z.string() }).optional().catch(undefined),
+  permissions: z
+    .object({
+      mode: z.string(),
+      rules: z
+        .object({
+          allow: z.array(z.string()).optional(),
+          ask: z.array(z.string()).optional(),
+          deny: z.array(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .optional()
+    .catch(undefined),
   /** Optional provenance for tasks launched by a project GitHub automation. */
   automation: z
     .object({

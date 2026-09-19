@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn as nodeSpawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 import type {
@@ -16,7 +16,12 @@ import type {
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { randomUUID } from 'node:crypto';
-import { translateClaudePermissions, type PermissionSpec } from './permission-map.ts';
+import {
+  parseClaudePermissionModeChoices,
+  remapClaudePermissionMode,
+  translateClaudePermissions,
+  type PermissionSpec,
+} from './permission-map.ts';
 import { claudePermissionResponse } from './permission-prompt.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
@@ -102,13 +107,21 @@ export class ClaudeCliRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const args = buildClaudeArgs(spec);
+    const advertised = advertisedClaudePermissionModes(this.bin);
+    const args = buildClaudeArgs(spec, process.env, { advertisedPermissionModes: advertised });
+    const needsStdioPrompt = args.includes('--permission-prompt-tool');
 
     let child: ChildProcessWithoutNullStreams;
     try {
       child = nodeSpawn(this.bin, args, {
         cwd: spec.cwd,
-        env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
+        env: buildChildEnv({
+          backend: this.backend,
+          extraEnv: {
+            ...spec.env,
+            ...(needsStdioPrompt ? { CLAUDE_CODE_SDK_CONTROL_PORT: 'stdin' } : {}),
+          },
+        }),
       });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
@@ -119,7 +132,9 @@ export class ClaudeCliRunner implements AgentRunner {
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
     /** Pending `can_use_tool` requests awaiting a `control_response` (#475). */
-    const pendingPermissions = new Map<string, Record<string, unknown>>();
+    const pendingPermissions = new Map<string, { input: Record<string, unknown>; toolName: string }>();
+    const allowAlways = new Set<string>();
+    const denyAlways = new Set<string>();
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -150,12 +165,13 @@ export class ClaudeCliRunner implements AgentRunner {
       }
     };
 
-    // Declare control-protocol support so Claude routes approvals through
-    // `can_use_tool` instead of silently auto-denying (#475 Phase 1.10 / 2.1).
+    // Declare control-protocol support. `--permission-prompt-tool stdio` is what
+    // actually registers the can_use_tool callback; initialize still has to name
+    // the SDK fields the CLI expects or it treats the host as having none.
     writeStdin({
       type: 'control_request',
       request_id: `cez-init-${randomUUID()}`,
-      request: { subtype: 'initialize' },
+      request: { subtype: 'initialize', hooks: null, agents: null },
     });
 
     const sendMessage = (content: ContentBlock[]): boolean => {
@@ -179,14 +195,22 @@ export class ClaudeCliRunner implements AgentRunner {
 
     const respondPermission = (requestId: string, optionId: string): boolean => {
       if (!stdinOpen) return false;
-      const input = pendingPermissions.get(requestId);
-      if (input === undefined) return false;
-      pendingPermissions.delete(requestId);
-      const response = claudePermissionResponse(optionId, input);
-      return writeStdin({
+      const pending = pendingPermissions.get(requestId);
+      if (pending === undefined) return false;
+      if (optionId === 'allow_always') allowAlways.add(pending.toolName);
+      if (optionId === 'reject_always') denyAlways.add(pending.toolName);
+      const response = claudePermissionResponse(optionId, pending.input);
+      const ok = writeStdin({
         type: 'control_response',
         response: { subtype: 'success', request_id: requestId, response },
       });
+      if (ok) {
+        pendingPermissions.delete(requestId);
+      } else {
+        if (optionId === 'allow_always') allowAlways.delete(pending.toolName);
+        if (optionId === 'reject_always') denyAlways.delete(pending.toolName);
+      }
+      return ok;
     };
 
     // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
@@ -283,6 +307,9 @@ export class ClaudeCliRunner implements AgentRunner {
           const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
           // Track pending can_use_tool so respondPermission can echo updatedInput.
           trackPendingPermission(mappedMessage, pendingPermissions);
+          if (autoAnswerSessionPermission(mappedMessage, allowAlways, denyAlways, respondPermission)) {
+            continue;
+          }
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
           let delta = 0;
@@ -383,7 +410,7 @@ export class ClaudeCliRunner implements AgentRunner {
 /** Remember a `can_use_tool` request's input so an allow answer can echo it. */
 export function trackPendingPermission(
   msg: unknown,
-  pending: Map<string, Record<string, unknown>>,
+  pending: Map<string, { input: Record<string, unknown>; toolName: string }>,
 ): void {
   if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) return;
   const record = msg as Record<string, unknown>;
@@ -396,29 +423,81 @@ export function trackPendingPermission(
     typeof req.input === 'object' && req.input !== null && !Array.isArray(req.input)
       ? (req.input as Record<string, unknown>)
       : {};
-  pending.set(record.request_id, input);
+  const toolName = typeof req.tool_name === 'string' && req.tool_name.trim() !== '' ? req.tool_name : 'Tool';
+  pending.set(record.request_id, { input, toolName });
+}
+
+function autoAnswerSessionPermission(
+  msg: unknown,
+  allowAlways: Set<string>,
+  denyAlways: Set<string>,
+  respond: (requestId: string, optionId: string) => boolean,
+): boolean {
+  if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) return false;
+  const record = msg as Record<string, unknown>;
+  if (record.type !== 'control_request' || typeof record.request_id !== 'string') return false;
+  const request = record.request;
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) return false;
+  const req = request as Record<string, unknown>;
+  if (req.subtype !== 'can_use_tool') return false;
+  const toolName = typeof req.tool_name === 'string' ? req.tool_name : '';
+  if (allowAlways.has(toolName)) return respond(record.request_id, 'allow_once');
+  if (denyAlways.has(toolName)) return respond(record.request_id, 'reject_once');
+  return false;
+}
+
+const advertisedModeCache = new Map<string, Set<string>>();
+
+/** Probe `claude --help` once per binary for `--permission-mode` choices. */
+export function advertisedClaudePermissionModes(bin: string): Set<string> {
+  const cached = advertisedModeCache.get(bin);
+  if (cached) return cached;
+  if (bin.endsWith('mock-claude.mjs')) {
+    const empty = new Set<string>();
+    advertisedModeCache.set(bin, empty);
+    return empty;
+  }
+  let text = '';
+  try {
+    text = execFileSync(bin, ['--help'], {
+      encoding: 'utf8',
+      timeout: 4000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    const record = err && typeof err === 'object' ? (err as { stdout?: unknown; stderr?: unknown }) : {};
+    text = `${String(record.stdout ?? '')}\n${String(record.stderr ?? '')}`;
+  }
+  const modes = parseClaudePermissionModeChoices(text);
+  advertisedModeCache.set(bin, modes);
+  return modes;
+}
+
+export function __resetAdvertisedClaudePermissionModesForTests(): void {
+  advertisedModeCache.clear();
 }
 
 /**
  * Build the headless argv. `--input-format stream-json` reads user messages
  * from stdin; `--output-format stream-json --verbose` gives per-event NDJSON.
  *
- * Permission mode comes from `spec.permissions` (translated via
- * `permission-map.ts`). Absent = `auto` = `--dangerously-skip-permissions`
- * (full, unrestricted — matching the historical default and spec §auto).
- * `CEZ_APPROVAL_GATE=1` overrides the mode to `acceptEdits` for the legacy
- * approval-gate opt-in (#435); it takes precedence over `spec.permissions`.
+ * Absent `spec.permissions` keeps the historical zero-config posture:
+ * `--permission-mode dontAsk` + the workflow `--allowedTools` list (unapproved
+ * tools denied without prompting). Explicit `{ mode: 'auto' }` is skip-all.
+ * Restrictive modes add `--permission-prompt-tool stdio` so Claude emits
+ * `can_use_tool` instead of auto-denying, and do NOT dump DEFAULT_ALLOWED_TOOLS
+ * into `--allowedTools` (that auto-approves Bash and shadows the callback).
+ * `CEZ_APPROVAL_GATE=1` forces guarded.
  */
 export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
+  opts: { advertisedPermissionModes?: Set<string> } = {},
 ): string[] {
-  // Translate the permission spec (defaulting to `auto`).
-  const effectivePermSpec: PermissionSpec = spec.permissions ?? { mode: 'auto' };
-  // Legacy env override: CEZ_APPROVAL_GATE=1 forces acceptEdits regardless.
-  const permSpec: PermissionSpec =
-    env.CEZ_APPROVAL_GATE === '1' ? { mode: 'guarded' } : effectivePermSpec;
-  const perm = translateClaudePermissions(permSpec);
+  const permSpec: PermissionSpec | undefined =
+    env.CEZ_APPROVAL_GATE === '1'
+      ? { mode: 'guarded', ...(spec.permissions?.rules ? { rules: spec.permissions.rules } : {}) }
+      : spec.permissions;
 
   const args: string[] = [
     '--input-format',
@@ -428,15 +507,38 @@ export function buildClaudeArgs(
     '--verbose',
   ];
 
-  if (perm.dangerouslySkipPermissions) {
-    args.push('--dangerously-skip-permissions');
-  } else if (perm.permissionMode) {
-    args.push('--permission-mode', perm.permissionMode);
+  if (!permSpec) {
+    args.push('--permission-mode', 'dontAsk');
+    const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+    if (allowed.length > 0) args.push('--allowedTools', allowed.join(','));
+  } else {
+    const perm = translateClaudePermissions(permSpec);
+    if (perm.dangerouslySkipPermissions) {
+      args.push('--dangerously-skip-permissions');
+    } else {
+      if (perm.permissionMode) {
+        args.push(
+          '--permission-mode',
+          remapClaudePermissionMode(perm.permissionMode, opts.advertisedPermissionModes ?? new Set()),
+        );
+      }
+      if (perm.permissionPromptToolStdio) {
+        args.push('--permission-prompt-tool', 'stdio');
+      }
+      if (perm.settingsJson) {
+        args.push('--settings', perm.settingsJson);
+      }
+      const allowed = [...perm.additionalAllowedTools];
+      if (spec.bashAllowlist && spec.bashAllowlist.length > 0) {
+        allowed.push(...buildAllowedTools(['Bash'], spec.bashAllowlist));
+      }
+      if (allowed.length > 0) args.push('--allowedTools', allowed.join(','));
+      if (perm.disallowedTools.length > 0) {
+        args.push('--disallowedTools', perm.disallowedTools.join(','));
+      }
+    }
   }
 
-  if (perm.settingsJson) {
-    args.push('--settings', perm.settingsJson);
-  }
   if (spec.systemPrompt) {
     args.push('--append-system-prompt', spec.systemPrompt);
   }
@@ -449,15 +551,6 @@ export function buildClaudeArgs(
     } else {
       args.push('--session-id', spec.sessionId);
     }
-  }
-  // Merge spec-level allowedTools with permission-level additionalAllowedTools.
-  const baseAllowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
-  const allAllowed = [...baseAllowed, ...perm.additionalAllowedTools];
-  if (allAllowed.length > 0) {
-    args.push('--allowedTools', allAllowed.join(','));
-  }
-  if (perm.disallowedTools.length > 0) {
-    args.push('--disallowedTools', perm.disallowedTools.join(','));
   }
   if (spec.model) {
     args.push('--model', spec.model);

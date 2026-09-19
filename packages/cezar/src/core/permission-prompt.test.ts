@@ -54,7 +54,7 @@ describe('claude-ui-mapper permission.requested (#475)', () => {
 
 describe('trackPendingPermission + claudePermissionResponse', () => {
   it('remembers input and builds allow/deny payloads', () => {
-    const pending = new Map<string, Record<string, unknown>>();
+    const pending = new Map<string, { input: Record<string, unknown>; toolName: string }>();
     trackPendingPermission(
       {
         type: 'control_request',
@@ -63,12 +63,12 @@ describe('trackPendingPermission + claudePermissionResponse', () => {
       },
       pending,
     );
-    expect(pending.get('req_9')).toEqual({ command: 'ls' });
-    expect(claudePermissionResponse('allow_once', pending.get('req_9')!)).toEqual({
+    expect(pending.get('req_9')).toEqual({ input: { command: 'ls' }, toolName: 'Bash' });
+    expect(claudePermissionResponse('allow_once', pending.get('req_9')!.input)).toEqual({
       behavior: 'allow',
       updatedInput: { command: 'ls' },
     });
-    expect(claudePermissionResponse('reject_once', pending.get('req_9')!).behavior).toBe('deny');
+    expect(claudePermissionResponse('reject_once', pending.get('req_9')!.input).behavior).toBe('deny');
   });
 });
 

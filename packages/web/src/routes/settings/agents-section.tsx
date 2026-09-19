@@ -22,9 +22,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
 import {
+  DEFAULT_PERMISSION_PRESET,
   formatPermissionRulesText,
   parsePermissionRulesText,
   PERMISSION_MODES,
+  type PermissionChoice,
   type PermissionMode,
 } from '@/lib/permission-modes'
 import {
@@ -305,7 +307,7 @@ function AgentsForm({
         onSave={(permissions) =>
           save.mutate(
             { permissions },
-            { onSuccess: () => toast(permissions === null ? 'Permissions reset to Auto' : 'Permissions saved') },
+            { onSuccess: () => toast(permissions === null ? 'Permissions reset to workspace default' : 'Permissions saved') },
           )
         }
       />
@@ -462,41 +464,52 @@ function PermissionsField({
   saving: boolean
   onSave: (permissions: SetConfigInput['permissions']) => void
 }) {
-  const savedMode = (config.permissions?.mode ?? 'auto') as PermissionMode
-  const [mode, setMode] = useState<PermissionMode>(savedMode)
+  const savedMode: PermissionChoice = config.permissions?.mode && (PERMISSION_MODES.some((m) => m.id === config.permissions?.mode))
+    ? (config.permissions.mode as PermissionMode)
+    : 'default'
+  const [mode, setMode] = useState<PermissionChoice>(savedMode)
   const [allowText, setAllowText] = useState(formatPermissionRulesText(config.permissions?.rules?.allow))
   const [askText, setAskText] = useState(formatPermissionRulesText(config.permissions?.rules?.ask))
   const [denyText, setDenyText] = useState(formatPermissionRulesText(config.permissions?.rules?.deny))
 
   const savedKey = JSON.stringify(config.permissions ?? null)
   useEffect(() => {
-    setMode((config.permissions?.mode ?? 'auto') as PermissionMode)
+    setMode(savedMode)
     setAllowText(formatPermissionRulesText(config.permissions?.rules?.allow))
     setAskText(formatPermissionRulesText(config.permissions?.rules?.ask))
     setDenyText(formatPermissionRulesText(config.permissions?.rules?.deny))
   }, [savedKey]) // eslint-disable-line react-hooks/exhaustive-deps -- re-seed only when server payload changes
 
-  const allow = parsePermissionRulesText(allowText)
-  const ask = parsePermissionRulesText(askText)
-  const deny = parsePermissionRulesText(denyText)
+  const parsedAllow = parsePermissionRulesText(allowText)
+  const parsedAsk = parsePermissionRulesText(askText)
+  const parsedDeny = parsePermissionRulesText(denyText)
+  const invalid = [...parsedAllow.invalid, ...parsedAsk.invalid, ...parsedDeny.invalid]
+  const allow = parsedAllow.rules
+  const ask = parsedAsk.rules
+  const deny = parsedDeny.rules
   const hasRules = Boolean(allow || ask || deny)
-  const draft = {
-    mode,
-    ...(hasRules ? { rules: { ...(allow ? { allow } : {}), ...(ask ? { ask } : {}), ...(deny ? { deny } : {}) } } : {}),
-  }
-  const saved = config.permissions ?? { mode: 'auto' as const }
-  const savedComparable = {
-    mode: saved.mode,
-    ...(saved.rules && (saved.rules.allow?.length || saved.rules.ask?.length || saved.rules.deny?.length)
-      ? {
-          rules: {
-            ...(saved.rules.allow?.length ? { allow: saved.rules.allow } : {}),
-            ...(saved.rules.ask?.length ? { ask: saved.rules.ask } : {}),
-            ...(saved.rules.deny?.length ? { deny: saved.rules.deny } : {}),
-          },
+  const draft =
+    mode === 'default'
+      ? null
+      : {
+          mode,
+          ...(hasRules ? { rules: { ...(allow ? { allow } : {}), ...(ask ? { ask } : {}), ...(deny ? { deny } : {}) } } : {}),
         }
-      : {}),
-  }
+  const saved = config.permissions ?? null
+  const savedComparable = saved
+    ? {
+        mode: saved.mode,
+        ...(saved.rules && (saved.rules.allow?.length || saved.rules.ask?.length || saved.rules.deny?.length)
+          ? {
+              rules: {
+                ...(saved.rules.allow?.length ? { allow: saved.rules.allow } : {}),
+                ...(saved.rules.ask?.length ? { ask: saved.rules.ask } : {}),
+                ...(saved.rules.deny?.length ? { deny: saved.rules.deny } : {}),
+              },
+            }
+          : {}),
+      }
+    : null
   const dirty = JSON.stringify(draft) !== JSON.stringify(savedComparable)
 
   return (
@@ -505,7 +518,7 @@ function PermissionsField({
       hint="What agents may do without asking. Applies to every new task; each task can override it in the composer."
     >
       <div data-slot="agents-permissions" className="flex max-w-xl flex-col gap-2">
-        {PERMISSION_MODES.map((preset) => (
+        {[DEFAULT_PERMISSION_PRESET, ...PERMISSION_MODES].map((preset) => (
           <label
             key={preset.id}
             className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3.5 py-3 ${
@@ -523,9 +536,9 @@ function PermissionsField({
             <span>
               <span className="flex items-center gap-2 text-[13.5px] font-semibold text-foreground">
                 {preset.label}
-                {preset.id === 'auto' ? (
+                {preset.id === 'default' ? (
                   <span className="rounded-full border border-border px-2 py-px text-[10.5px] font-medium text-muted-foreground">
-                    default
+                    zero-config
                   </span>
                 ) : null}
               </span>
@@ -563,6 +576,11 @@ function PermissionsField({
             ask wins over allow. Fidelity varies by runner — codex applies the preset only;
             opencode applies tool-level rules. A run notes anything it couldn&apos;t apply.
           </p>
+          {invalid.length > 0 ? (
+            <p role="alert" className="mt-2 text-xs text-danger">
+              Invalid specifiers (Tool or Tool(pattern) only, no spaces around the name): {invalid.join(', ')}
+            </p>
+          ) : null}
         </details>
 
         <div className="flex items-center gap-3 pt-1">
@@ -571,11 +589,8 @@ function PermissionsField({
             variant="outline"
             size="sm"
             data-action="agents-save-permissions"
-            disabled={!dirty || saving}
-            onClick={() => {
-              if (mode === 'auto' && !hasRules) onSave(null)
-              else onSave(draft)
-            }}
+            disabled={!dirty || saving || invalid.length > 0}
+            onClick={() => onSave(draft)}
           >
             Save
           </Button>

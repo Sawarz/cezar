@@ -54,10 +54,12 @@ describe('buildClaudeArgs systemPrompt', () => {
 describe('buildClaudeArgs approval gate', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 
-  it('defaults to auto = dangerously-skip-permissions (full unrestricted)', () => {
+  it('defaults to historical dontAsk + no skip-permissions', () => {
     const args = buildClaudeArgs(spec, {});
-    expect(args).toContain('--dangerously-skip-permissions');
-    expect(args).not.toContain('--permission-mode');
+    const idx = args.indexOf('--permission-mode');
+    expect(args[idx + 1]).toBe('dontAsk');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args).not.toContain('--permission-prompt-tool');
   });
 
   it('enables Claude approval prompts only when explicitly requested', () => {
@@ -67,10 +69,35 @@ describe('buildClaudeArgs approval gate', () => {
   });
 
   it('honours an explicit guarded permission mode', () => {
-    const args = buildClaudeArgs({ ...spec, permissions: { mode: 'guarded' } }, {});
+    const args = buildClaudeArgs(
+      { ...spec, permissions: { mode: 'guarded' }, allowedTools: ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'] },
+      {},
+    );
     const idx = args.indexOf('--permission-mode');
     expect(args[idx + 1]).toBe('acceptEdits');
     expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args).toContain('--permission-prompt-tool');
+    expect(args[args.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
+    // Workflow DEFAULT_ALLOWED_TOOLS must not auto-approve Bash (that shadows can_use_tool).
+    const allowedIdx = args.indexOf('--allowedTools');
+    if (allowedIdx >= 0) {
+      expect(args[allowedIdx + 1]).not.toMatch(/\bBash\b/);
+    }
+  });
+
+  it('explicit auto is skip-permissions (opt-in, not the zero-config default)', () => {
+    const args = buildClaudeArgs({ ...spec, permissions: { mode: 'auto' } }, {});
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).not.toContain('--permission-mode');
+  });
+
+  it('remaps Claude manual → default when the installed CLI does not advertise manual', () => {
+    const args = buildClaudeArgs(
+      { ...spec, permissions: { mode: 'manual' } },
+      {},
+      { advertisedPermissionModes: new Set(['acceptEdits', 'auto', 'bypassPermissions', 'default', 'dontAsk', 'plan']) },
+    );
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
   });
 });
 

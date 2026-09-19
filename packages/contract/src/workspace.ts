@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { type Runner, runnerSchema } from './health.ts';
+import { permissionSpecSchema } from './permissions.ts';
 
 /**
  * The workspace + settings families: `~/.cezar/config.json`'s settings slice, both GUI-pref bags
@@ -355,20 +356,10 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
-  /** Permission mode (spec 2026-07-17-permission-modes, #475): null = no config key, treated
-   *  as `auto` (full, unrestricted access for all backends). */
-  permissions: z
-    .object({
-      mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
-      rules: z
-        .object({
-          allow: z.array(z.string()).optional(),
-          ask: z.array(z.string()).optional(),
-          deny: z.array(z.string()).optional(),
-        })
-        .optional(),
-    })
-    .nullable(),
+  /** Permission mode (spec 2026-07-17-permission-modes, #475): null = no config key, which
+   *  keeps each backend's historical zero-config posture (Claude: `dontAsk` + coding-tool
+   *  allowlist; Codex/OpenCode: unrestricted). Explicit `{ mode: 'auto' }` is skip-all. */
+  permissions: permissionSpecSchema.nullable(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -404,20 +395,8 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
-  /** null clears the key back to the default (`auto`). */
-  permissions: z
-    .object({
-      mode: z.enum(['auto', 'guarded', 'read-only', 'manual']),
-      rules: z
-        .object({
-          allow: z.array(z.string()).optional(),
-          ask: z.array(z.string()).optional(),
-          deny: z.array(z.string()).optional(),
-        })
-        .optional(),
-    })
-    .nullable()
-    .optional(),
+  /** null clears the key back to the historical workspace default (not skip-all). */
+  permissions: permissionSpecSchema.nullable().optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 

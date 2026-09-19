@@ -67,9 +67,11 @@ import {
   resolveAutoApply,
 } from '@/lib/prompt-templates'
 import {
+  DEFAULT_PERMISSION_PRESET,
   isPermissionMode,
   PERMISSION_MODES,
   permissionModeLabel,
+  type PermissionChoice,
   type PermissionMode,
 } from '@/lib/permission-modes'
 import {
@@ -338,21 +340,15 @@ export function NewTaskRoute() {
   const worktreeOn = runMode.worktree
   const autonomousOn = runMode.autonomous
 
-  // Permission mode (spec 2026-07-17-permission-modes, #475): draft override → remembered
-  // last-used → config default → auto. An empty draft means "follow config".
-  const configPermissionMode: PermissionMode =
+  // Permission mode: draft override → configured default → historical (`default`).
+  // A remembered last-used value must not outrank a configured security default (#475 M3).
+  const configPermissionMode: PermissionMode | null =
     config.data?.permissions?.mode && isPermissionMode(config.data.permissions.mode)
       ? config.data.permissions.mode
-      : 'auto'
-  const rememberedPermissionMode =
-    typeof uiState.data?.lastPermissionMode === 'string' &&
-    isPermissionMode(uiState.data.lastPermissionMode)
-      ? uiState.data.lastPermissionMode
       : null
-  const effectivePermissionMode: PermissionMode =
-    draft.permissionMode ?? rememberedPermissionMode ?? configPermissionMode
+  const effectivePermissionMode: PermissionChoice = draft.permissionMode ?? configPermissionMode ?? 'default'
   const permissionConflictsWithAutonomous =
-    autonomousOn && effectivePermissionMode !== 'auto'
+    autonomousOn && effectivePermissionMode !== 'auto' && effectivePermissionMode !== 'default'
 
   // Follow-up generation (#444) is offered only while the server has the global inbox on
   // (#471, `CEZ_FOLLOWUPS=1`) — there is no inbox for the follow-ups to land in otherwise, and
@@ -472,7 +468,7 @@ export function NewTaskRoute() {
   const startRun = async (
     text: string,
     images: AttachmentInput[],
-    permissionMode: PermissionMode,
+    permissionMode: PermissionChoice,
   ) => {
     if (!providersReady || runner === null) {
       throw new Error(
@@ -506,9 +502,11 @@ export function NewTaskRoute() {
         todoId: deepLink.todo,
         dispatch,
         // Only send an override when it differs from the config default — otherwise the
-        // server applies config (or auto) itself.
+        // server applies config (or the historical zero-config posture).
         permissions:
-          permissionMode === configPermissionMode ? undefined : { mode: permissionMode },
+          permissionMode === 'default' || permissionMode === configPermissionMode
+            ? undefined
+            : { mode: permissionMode },
       }),
     )
     // Remember what was actually run so the next visit preselects it (legacy
@@ -522,7 +520,7 @@ export function NewTaskRoute() {
       // filling the list with the default would push real choices out of it.
       ...(source ? { recentSources: pushRecentSource(recentSources, source) } : {}),
       ...(followupsToggleShown ? { lastGenerateFollowups: generateFollowupsOn } : {}),
-      lastPermissionMode: permissionMode,
+      lastPermissionMode: permissionMode === 'default' ? undefined : permissionMode,
       // Frequency sort (#408): only a SKILL pick counts — the map is keyed by skill name, and a
       // workflow choice here doesn't select one directly. Gated on the CURRENT map being known:
       // the PUT merge is shallow, so bumping off an errored ui-state query (`sourcesReady` only
@@ -786,22 +784,19 @@ export function NewTaskRoute() {
                 ariaLabel="Permission mode"
                 label={permissionModeLabel(effectivePermissionMode).toLowerCase()}
                 value={effectivePermissionMode}
-                hint="What the agent may do without asking. Auto runs fully unrestricted."
+                hint="What the agent may do without asking. Default keeps Claude's historical dontAsk allowlist; Auto is skip-all."
                 className={
                   permissionConflictsWithAutonomous
                     ? 'border-warning/60 text-warning'
-                    : effectivePermissionMode !== 'auto'
+                    : effectivePermissionMode !== 'auto' && effectivePermissionMode !== 'default'
                       ? 'border-warning/40 text-pending-strong'
                       : undefined
                 }
-                  onPick={(next) => {
-                  // Always pin the picked mode on the draft. Clearing to `null` when the pick
-                  // matched Settings looked tidy, but then `lastPermissionMode` jumped back in
-                  // (`draft ?? remembered ?? config`) and Auto became unselectable after any
-                  // non-auto run — the click set null and remembered re-won.
-                  update({ permissionMode: next as PermissionMode })
+                onPick={(next) => {
+                  if (next === 'default') update({ permissionMode: null })
+                  else update({ permissionMode: next as PermissionMode })
                 }}
-                options={PERMISSION_MODES.map((m) => ({
+                options={[DEFAULT_PERMISSION_PRESET, ...PERMISSION_MODES].map((m) => ({
                   value: m.id,
                   label: m.label,
                   desc: m.desc,

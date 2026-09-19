@@ -73,8 +73,9 @@ export interface AgentRunSpec {
   resume?: boolean;
   /**
    * Permission mode for this run (spec 2026-07-17-permission-modes, #475).
-   * Absent = treat as `auto` (full, unrestricted access for all backends).
-   * Each runner translates this via `permission-map.ts`.
+   * Absent = each backend's historical zero-config posture (Claude: dontAsk +
+   * coding-tool allowlist; Codex/OpenCode: unrestricted). Explicit `{ mode: 'auto' }`
+   * is skip-all. Each runner translates this via `permission-map.ts`.
    */
   permissions?: PermissionSpec;
 }

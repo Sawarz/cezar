@@ -80,6 +80,7 @@ function PendingPermission({
       await respondPermission(run.id, permission.id, optionId)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+    } finally {
       setPending(false)
     }
   }
