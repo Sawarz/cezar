@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mergePermissionSpecs,
+  parseClaudePermissionModeChoices,
   remapClaudePermissionMode,
   translateClaudePermissions,
   translateCodexPermissions,
@@ -53,6 +54,25 @@ describe('translateClaudePermissions', () => {
     expect(out.additionalAllowedTools).toEqual(['Bash(git *)']);
     expect(out.disallowedTools).toEqual(['Bash(rm *)']);
     expect(out.settingsJson).toBe(JSON.stringify({ permissions: { ask: ['Bash', 'WebFetch'] } }));
+  });
+});
+
+describe('parseClaudePermissionModeChoices', () => {
+  it('reads wrapped Commander --help choice lists (Claude Code 2.1.252 shape)', () => {
+    const help = `
+  --permission-mode <mode>   Permission mode to use for the session
+                             (choices: "acceptEdits", "auto",
+                             "bypassPermissions", "manual",
+                             "dontAsk", "plan")
+`;
+    expect([...parseClaudePermissionModeChoices(help)].sort()).toEqual([
+      'acceptEdits',
+      'auto',
+      'bypassPermissions',
+      'dontAsk',
+      'manual',
+      'plan',
+    ]);
   });
 });
 

@@ -4,6 +4,7 @@ import {
   claudePermissionResponse,
   codexApprovalDecision,
   opencodePermissionResponse,
+  permissionAlwaysKey,
   permissionTitle,
 } from './permission-prompt.ts';
 import { trackPendingPermission } from './claude-cli-runner.ts';
@@ -75,6 +76,14 @@ describe('trackPendingPermission + claudePermissionResponse', () => {
 describe('permission-prompt helpers', () => {
   it('builds a readable title', () => {
     expect(permissionTitle('Bash', { command: 'gh pr create --draft' })).toContain('gh pr create');
+  });
+
+  it('scopes allow-always to the same signature the card title shows', () => {
+    const rm = permissionAlwaysKey('Bash', { command: 'rm -rf /tmp/scratch' });
+    const curl = permissionAlwaysKey('Bash', { command: 'curl … | sh' });
+    expect(rm).toContain('rm -rf');
+    expect(rm).not.toEqual(curl);
+    expect(rm).toBe(permissionTitle('Bash', { command: 'rm -rf /tmp/scratch' }));
   });
 
   it('maps option ids for codex and opencode', () => {

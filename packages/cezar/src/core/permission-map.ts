@@ -129,10 +129,17 @@ const CLAUDE_PERMISSION_MODE_NAMES = [
 /** Parse `--permission-mode` choices out of `claude --help` / the invalid-arg error. */
 export function parseClaudePermissionModeChoices(text: string): Set<string> {
   const into = new Set<string>();
-  const block = /permission-mode[\s\S]{0,400}?(?:choices are |choices:\s*)([^\n]+)/i.exec(text);
-  const haystack = block?.[1] ?? text;
+  // Commander wraps the choices list across lines; take a window after the
+  // flag rather than a single-line capture so `"manual"` on a later line still
+  // matches (Claude Code 2.1.252 help shape).
+  const windowMatch = /--?permission-mode\b[\s\S]{0,800}/i.exec(text);
+  const haystack = windowMatch?.[0] ?? text;
   for (const name of CLAUDE_PERMISSION_MODE_NAMES) {
-    if (haystack.includes(name)) into.add(name);
+    if (haystack.includes(`"${name}"`) || haystack.includes(`'${name}'`)) {
+      into.add(name);
+      continue;
+    }
+    if (new RegExp(`\\b${name}\\b`).test(haystack)) into.add(name);
   }
   return into;
 }

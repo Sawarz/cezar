@@ -27,18 +27,37 @@ export const PERMISSION_OPTIONS_WITH_ALWAYS: readonly PermissionOption[] = [
   OPTION.reject_always,
 ];
 
-/** OpenCode's reply surface: once / always / reject (no reject_always). */
-export const PERMISSION_OPTIONS_CODEX: readonly PermissionOption[] = [
+/**
+ * Shared Codex + OpenCode reply surface: once / always / reject (no
+ * `reject_always`). Both backends map `allow_always → always` / `acceptForSession`
+ * and have no real reject-always, so they share one constant.
+ */
+export const PERMISSION_OPTIONS_SESSION: readonly PermissionOption[] = [
   OPTION.allow_once,
   OPTION.allow_always,
   OPTION.reject_once,
 ];
+
+/** @deprecated Prefer `PERMISSION_OPTIONS_SESSION` — same options. */
+export const PERMISSION_OPTIONS_CODEX = PERMISSION_OPTIONS_SESSION;
+
+/** @deprecated Prefer `PERMISSION_OPTIONS_SESSION` — same options. */
+export const PERMISSION_OPTIONS_OPENCODE = PERMISSION_OPTIONS_SESSION;
 
 /** Human title for a permission card — `Bash · npm test`, truncated via toolDisplay. */
 export function permissionTitle(toolName: string, input: unknown): string {
   const display = toolDisplay(toolName, input);
   const detail = display.subtitle ?? summariseInput(input);
   return detail ? `${display.title} · ${detail}` : display.title;
+}
+
+/**
+ * Session-scoped "Allow always" / "Reject always" key — tool name + the same
+ * input signature the card title shows, so granting `Bash · rm -rf /tmp/x`
+ * does not auto-approve every future `Bash` call.
+ */
+export function permissionAlwaysKey(toolName: string, input: unknown): string {
+  return permissionTitle(toolName, input);
 }
 
 function summariseInput(input: unknown): string | undefined {

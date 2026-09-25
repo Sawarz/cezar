@@ -46,7 +46,7 @@ import type {
   UiToolItem,
   UiUsageUpdatedEvent,
 } from './ui-events.ts';
-import { PERMISSION_OPTIONS_OPENCODE, permissionTitle } from './permission-prompt.ts';
+import { PERMISSION_OPTIONS_SESSION, permissionTitle } from './permission-prompt.ts';
 import { toolDisplay } from './tool-display.ts';
 
 /** Per-message telemetry: `message.updated` snapshots (cumulative per
@@ -210,7 +210,7 @@ function mapPermissionUpdated(
     type: 'permission.requested',
     requestId,
     title: str(perm.title) ?? permissionTitle(toolName, input),
-    options: [...PERMISSION_OPTIONS_OPENCODE],
+    options: [...PERMISSION_OPTIONS_SESSION],
   };
   const callId = str(perm.callID) ?? str(perm.callId);
   if (callId !== undefined) event.itemId = callId;

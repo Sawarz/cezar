@@ -221,5 +221,11 @@ export interface AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts?: SessionOptions,
   ): AgentSession;
+  /**
+   * Optional pre-spawn warmup (e.g. async `claude --help` permission-mode
+   * probe). Callers await this before `startSession` so the hot path never
+   * blocks the event loop on a sync exec.
+   */
+  prepare?(): Promise<void>;
   interrupt(): Promise<void>;
 }

@@ -1,4 +1,5 @@
-import { spawn as nodeSpawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn as nodeSpawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 import type {
@@ -22,7 +23,7 @@ import {
   translateClaudePermissions,
   type PermissionSpec,
 } from './permission-map.ts';
-import { claudePermissionResponse } from './permission-prompt.ts';
+import { claudePermissionResponse, permissionAlwaysKey } from './permission-prompt.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
@@ -35,6 +36,8 @@ import {
   toolResultImageBlocks,
   type ClaudeUiMapping,
 } from './claude-ui-mapper.ts';
+
+const execFileAsync = promisify(execFile);
 
 /** Default wall-clock cap for a single run before SIGTERM → SIGKILL.
  *  Interactive sessions pass `timeoutMs: 0` to disable it entirely. */
@@ -97,8 +100,14 @@ export class ClaudeCliRunner implements AgentRunner {
   }
 
   /** One-shot run: start a session and auto-end it after the first turn. */
-  run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
+  async run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
+    await this.prepare();
     return this.startSession(spec, onEvent, { autoEndAfterFirstTurn: true }).result;
+  }
+
+  /** Warm the async `claude --help` permission-mode cache before spawn. */
+  async prepare(): Promise<void> {
+    await advertisedClaudePermissionModes(this.bin);
   }
 
   async interrupt(): Promise<void> {
@@ -110,7 +119,9 @@ export class ClaudeCliRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const advertised = advertisedClaudePermissionModes(this.bin);
+    // Prefer the cache filled by `prepare()`; fall back to whatever is already
+    // cached (or empty) so startSession stays sync and never sync-execs.
+    const advertised = cachedAdvertisedClaudePermissionModes(this.bin) ?? new Set<string>();
     const args = buildClaudeArgs(spec, process.env, { advertisedPermissionModes: advertised });
     const needsStdioPrompt = args.includes('--permission-prompt-tool');
 
@@ -200,8 +211,9 @@ export class ClaudeCliRunner implements AgentRunner {
       if (!stdinOpen) return false;
       const pending = pendingPermissions.get(requestId);
       if (pending === undefined) return false;
-      if (optionId === 'allow_always') allowAlways.add(pending.toolName);
-      if (optionId === 'reject_always') denyAlways.add(pending.toolName);
+      const alwaysKey = permissionAlwaysKey(pending.toolName, pending.input);
+      if (optionId === 'allow_always') allowAlways.add(alwaysKey);
+      if (optionId === 'reject_always') denyAlways.add(alwaysKey);
       const response = claudePermissionResponse(optionId, pending.input);
       const ok = writeStdin({
         type: 'control_response',
@@ -210,8 +222,8 @@ export class ClaudeCliRunner implements AgentRunner {
       if (ok) {
         pendingPermissions.delete(requestId);
       } else {
-        if (optionId === 'allow_always') allowAlways.delete(pending.toolName);
-        if (optionId === 'reject_always') denyAlways.delete(pending.toolName);
+        if (optionId === 'allow_always') allowAlways.delete(alwaysKey);
+        if (optionId === 'reject_always') denyAlways.delete(alwaysKey);
       }
       return ok;
     };
@@ -310,7 +322,25 @@ export class ClaudeCliRunner implements AgentRunner {
           const mappedMessage = normalizeIntentionalTeardownResult(msg, terminatedByCezar);
           // Track pending can_use_tool so respondPermission can echo updatedInput.
           trackPendingPermission(mappedMessage, pendingPermissions);
-          if (autoAnswerSessionPermission(mappedMessage, allowAlways, denyAlways, respondPermission)) {
+          const auto = autoAnswerSessionPermission(
+            mappedMessage,
+            allowAlways,
+            denyAlways,
+            respondPermission,
+          );
+          if (auto) {
+            // Auto-answers from session "always" grants must still leave an
+            // audit trail — the card the user clicked showed a specific command.
+            emitUi((state) => ({
+              state,
+              events: [
+                {
+                  type: 'permission.resolved',
+                  requestId: auto.requestId,
+                  optionId: auto.optionId,
+                },
+              ],
+            }));
             continue;
           }
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
@@ -435,49 +465,80 @@ function autoAnswerSessionPermission(
   allowAlways: Set<string>,
   denyAlways: Set<string>,
   respond: (requestId: string, optionId: string) => boolean,
-): boolean {
-  if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) return false;
+): { requestId: string; optionId: 'allow_always' | 'reject_always' } | null {
+  if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) return null;
   const record = msg as Record<string, unknown>;
-  if (record.type !== 'control_request' || typeof record.request_id !== 'string') return false;
+  if (record.type !== 'control_request' || typeof record.request_id !== 'string') return null;
   const request = record.request;
-  if (typeof request !== 'object' || request === null || Array.isArray(request)) return false;
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) return null;
   const req = request as Record<string, unknown>;
-  if (req.subtype !== 'can_use_tool') return false;
-  const toolName = typeof req.tool_name === 'string' ? req.tool_name : '';
-  if (allowAlways.has(toolName)) return respond(record.request_id, 'allow_once');
-  if (denyAlways.has(toolName)) return respond(record.request_id, 'reject_once');
-  return false;
+  if (req.subtype !== 'can_use_tool') return null;
+  const toolName = typeof req.tool_name === 'string' && req.tool_name.trim() !== '' ? req.tool_name : 'Tool';
+  const input =
+    typeof req.input === 'object' && req.input !== null && !Array.isArray(req.input)
+      ? (req.input as Record<string, unknown>)
+      : {};
+  const key = permissionAlwaysKey(toolName, input);
+  if (allowAlways.has(key)) {
+    if (!respond(record.request_id, 'allow_once')) return null;
+    return { requestId: record.request_id, optionId: 'allow_always' };
+  }
+  if (denyAlways.has(key)) {
+    if (!respond(record.request_id, 'reject_once')) return null;
+    return { requestId: record.request_id, optionId: 'reject_always' };
+  }
+  return null;
 }
 
 const advertisedModeCache = new Map<string, Set<string>>();
+const advertisedModeInflight = new Map<string, Promise<Set<string>>>();
 
-/** Probe `claude --help` once per binary for `--permission-mode` choices. */
-export function advertisedClaudePermissionModes(bin: string): Set<string> {
+/** Sync read of a previously warmed cache — never probes. */
+export function cachedAdvertisedClaudePermissionModes(bin: string): Set<string> | undefined {
+  return advertisedModeCache.get(bin);
+}
+
+/** Probe `claude --help` once per binary for `--permission-mode` choices (async). */
+export async function advertisedClaudePermissionModes(bin: string): Promise<Set<string>> {
   const cached = advertisedModeCache.get(bin);
   if (cached) return cached;
-  if (bin.endsWith('mock-claude.mjs')) {
-    const empty = new Set<string>();
-    advertisedModeCache.set(bin, empty);
-    return empty;
-  }
-  let text = '';
+  const inflight = advertisedModeInflight.get(bin);
+  if (inflight) return inflight;
+
+  const probe = (async (): Promise<Set<string>> => {
+    if (bin.endsWith('mock-claude.mjs')) {
+      const empty = new Set<string>();
+      advertisedModeCache.set(bin, empty);
+      return empty;
+    }
+    let text = '';
+    try {
+      const result = await execFileAsync(bin, ['--help'], {
+        encoding: 'utf8',
+        timeout: 4000,
+        maxBuffer: 1024 * 1024,
+      });
+      text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+    } catch (err) {
+      const record = err && typeof err === 'object' ? (err as { stdout?: unknown; stderr?: unknown }) : {};
+      text = `${String(record.stdout ?? '')}\n${String(record.stderr ?? '')}`;
+    }
+    const modes = parseClaudePermissionModeChoices(text);
+    advertisedModeCache.set(bin, modes);
+    return modes;
+  })();
+
+  advertisedModeInflight.set(bin, probe);
   try {
-    text = execFileSync(bin, ['--help'], {
-      encoding: 'utf8',
-      timeout: 4000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (err) {
-    const record = err && typeof err === 'object' ? (err as { stdout?: unknown; stderr?: unknown }) : {};
-    text = `${String(record.stdout ?? '')}\n${String(record.stderr ?? '')}`;
+    return await probe;
+  } finally {
+    advertisedModeInflight.delete(bin);
   }
-  const modes = parseClaudePermissionModeChoices(text);
-  advertisedModeCache.set(bin, modes);
-  return modes;
 }
 
 export function __resetAdvertisedClaudePermissionModesForTests(): void {
   advertisedModeCache.clear();
+  advertisedModeInflight.clear();
 }
 
 /**

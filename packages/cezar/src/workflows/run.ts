@@ -119,6 +119,12 @@ async function configuredModelProvider(
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 /**
+ * Ceiling for an unanswered permission prompt (#475). The permission park clears
+ * the idle timer (the agent is blocked mid-turn) and is slot-exempt via
+ * `waiting` — without this, a forgotten prompt leaks a live child forever.
+ */
+export const PERMISSION_TIMEOUT_MS = IDLE_TIMEOUT_MS;
+/**
  * Task-completion marker from the agent contract (HANDOFF_INSTRUCTIONS): a
  * turn whose text ends with `CEZ:DONE` means "goal achieved, nothing to ask" —
  * the session is closed right away instead of parking at `waiting` (#347).
@@ -350,10 +356,13 @@ interface ActiveRun {
   lastOverriddenAsk?: string;
   /**
    * Pending permission requestIds for this live session (#475). Idle-timeout
-   * is exempt while any remain; session end cancels them with
-   * `permission.resolved { cancelled: true }`.
+   * is exempt while any remain (the agent is blocked mid-turn); a dedicated
+   * `permissionTimer` bounds how long that exemption may hold a live child.
+   * Session end cancels them with `permission.resolved { cancelled: true }`.
    */
   pendingPermissionIds?: Set<string>;
+  /** Ceiling timer for unanswered permission prompts — see `PERMISSION_TIMEOUT_MS`. */
+  permissionTimer?: NodeJS.Timeout;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -1588,8 +1597,9 @@ export class RunManager {
    *    workflowDef (or the catalog by name for older records);
    *  - `waiting` → the turn was over and the ball was in the user's court —
    *    settle exactly like a closed session (review/done, Continue still works),
-   *    unless `askParked` says the workflow stopped mid-way on a question (#917),
-   *    which settles `failed` instead so unrun steps are not reported as done;
+   *    unless `askParked` (#917) or `awaitingPermission` (#475) says the workflow
+   *    stopped mid-way on a question / tool prompt, which settles `failed`
+   *    instead so unrun steps are not reported as done;
    *  - `running` → mark interrupted, then immediately resume the last agent
    *    session via the Continue path, pointing the agent at its handoff file.
    * Call once, before the server starts taking requests.
@@ -1614,28 +1624,36 @@ export class RunManager {
         // its end, so settling it as a success is right. A mid-workflow park on
         // a `CEZ:ASK` (#917) had NOT run to its end — its later steps are still
         // `pending` — so the same settlement would report a workflow that
-        // stopped at its first question as a finished one. It ends the way any
-        // interrupted run ends instead: `failed`, with the Continue button that
-        // reopens the session so the question can still be answered. No
-        // automatic resume here, unlike the `running` branch below: the agent
-        // asked for a decision, and nudging it onward would be cezar making
-        // that decision on the user's behalf.
-        if (run.askParked) {
+        // stopped at its first question as a finished one. A permission park
+        // (#475) is the same shape: the tool never ran, and settling success
+        // would claim the blocked step finished. Both end as `failed`, with
+        // Continue still available. No automatic resume here, unlike the
+        // `running` branch below: the agent asked for a decision, and nudging
+        // it onward would be cezar making that decision on the user's behalf.
+        if (run.askParked || run.awaitingPermission) {
           const interruptedAt = new Date().toISOString();
           for (const step of run.steps) {
             if (step.status === 'waiting' || step.status === 'running') {
               this.store.updateStep(run.id, step.id, { status: 'failed', finishedAt: interruptedAt });
             }
           }
+          const error = run.awaitingPermission
+            ? 'interrupted — cezar process exited while a permission prompt was pending'
+            : 'interrupted — cezar process exited while the task was waiting for an answer';
+          const message = run.awaitingPermission
+            ? 'cezar restarted — the task was waiting for a permission decision'
+            : 'cezar restarted — the task was waiting for your answer; continue it to reply';
           this.store.updateRun(run.id, {
             status: 'failed',
-            error: 'interrupted — cezar process exited while the task was waiting for an answer',
+            error,
             finishedAt: interruptedAt,
             currentStepId: undefined,
+            awaitingPermission: undefined,
+            askParked: undefined,
           });
           this.store.appendEvent(run.id, {
             type: 'lifecycle',
-            message: 'cezar restarted — the task was waiting for your answer; continue it to reply',
+            message,
           });
           continue;
         }
@@ -3713,6 +3731,7 @@ export class RunManager {
           ...(record.permissions.rules ? { rules: record.permissions.rules } : {}),
         }
       : continueConfig.permissions;
+    await runner.prepare?.();
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -4504,6 +4523,7 @@ export class RunManager {
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     try {
+      await runner.prepare?.();
       session = runner.startSession(
         {
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
@@ -4616,7 +4636,8 @@ export class RunManager {
 
   /** Native backend asks / permission prompts arrive before turn-end. Persist
    *  and park immediately so the cockpit shows attention and the run releases
-   *  its workspace slot. Pending permissions also exempt the idle timer. */
+   *  its workspace slot. Pending permissions clear the idle timer and arm a
+   *  dedicated permission ceiling instead. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
     this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
@@ -4625,6 +4646,7 @@ export class RunManager {
     if (event.type === 'permission.requested') {
       (state.pendingPermissionIds ??= new Set()).add(event.requestId);
       this.clearIdleTimer(state);
+      this.armPermissionTimeout(runId, state);
       this.leaveMonitoring(runId);
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.add(runId);
@@ -4646,7 +4668,14 @@ export class RunManager {
     if (event.type === 'permission.resolved') {
       state.pendingPermissionIds?.delete(event.requestId);
       if (!state.pendingPermissionIds?.size) {
+        this.clearPermissionTimeout(state);
+        const hadPermissionPark = this.store.getRun(runId)?.awaitingPermission === true;
         this.store.updateRun(runId, { awaitingPermission: undefined });
+        // Only re-arm idle when we were actually parked on a prompt — auto-answers
+        // from session "always" grants emit resolved without ever parking.
+        if (hadPermissionPark && state.session?.open && !state.cancelled && !this.monitoring.has(runId)) {
+          this.armIdleTimer(runId, state);
+        }
       }
       return;
     }
@@ -4691,15 +4720,18 @@ export class RunManager {
     if (sink) sink.handle(resolved);
     else this.store.appendEvent(runId, { ...resolved, stepId: state.currentStepId });
     if (!state.pendingPermissionIds.size) {
+      this.clearPermissionTimeout(state);
       this.store.updateRun(runId, { awaitingPermission: undefined, status: 'running' });
       this.waiting.delete(runId);
       if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'running' });
+      if (state.session?.open && !state.cancelled) this.armIdleTimer(runId, state);
     }
     return 'ok';
   }
 
   /** Cancel every unanswered permission when the session tears down (#475). */
   private cancelPendingPermissions(runId: string, state: ActiveRun, sink?: UiEventSink): void {
+    this.clearPermissionTimeout(state);
     const pending = state.pendingPermissionIds;
     if (!pending?.size) return;
     for (const requestId of [...pending]) {
@@ -5219,6 +5251,31 @@ export class RunManager {
     if (state.idleTimer) {
       clearTimeout(state.idleTimer);
       state.idleTimer = undefined;
+    }
+  }
+
+  /** Bound how long an unanswered permission may keep a live child off the parallel cap. */
+  private armPermissionTimeout(runId: string, state: ActiveRun): void {
+    this.clearPermissionTimeout(state);
+    state.permissionTimer = setTimeout(() => {
+      state.permissionTimer = undefined;
+      if (!state.pendingPermissionIds?.size || state.cancelled) return;
+      if (!state.session?.open) return;
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `permission prompt timed out after ${Math.round(PERMISSION_TIMEOUT_MS / 60_000)}m — closing the session`,
+      });
+      const sink = state.currentStepId ? this.makeUiSink(runId, state.currentStepId) : undefined;
+      this.cancelPendingPermissions(runId, state, sink);
+      state.session.end();
+    }, PERMISSION_TIMEOUT_MS);
+    state.permissionTimer.unref?.();
+  }
+
+  private clearPermissionTimeout(state: ActiveRun): void {
+    if (state.permissionTimer) {
+      clearTimeout(state.permissionTimer);
+      state.permissionTimer = undefined;
     }
   }
 
