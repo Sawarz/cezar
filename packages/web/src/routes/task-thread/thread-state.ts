@@ -122,6 +122,9 @@ export interface ThreadState {
   turns: ThreadTurn[]
   /** v2 `session.ended` — the last one wins (each step runs its own session). */
   sessionEnded?: { reason: StopReason; message?: string }
+  /** Wall clock of the newest stamped event — any kind, deltas included. The live Working…
+   *  indicator reads it as "last activity", so a quiet session is told apart from a busy one. */
+  lastEventAt?: string
 }
 
 export interface ThreadReduceOptions {
@@ -381,6 +384,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   let pendingAsk: ThreadAsk | undefined
   /** Unresolved permission prompts keyed by requestId (#475). */
   const pendingPermissions = new Map<string, ThreadPermission>()
+  let lastEventAt: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
     turnSeq += 1
@@ -430,6 +434,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   }
 
   for (const event of events) {
+    lastEventAt = stamp(event.ts) ?? lastEventAt
     switch (event.type) {
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {
@@ -799,6 +804,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
     }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
+    ...(lastEventAt !== undefined ? { lastEventAt } : {}),
   }
 }
 
