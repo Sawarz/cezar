@@ -1,5 +1,6 @@
 import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
+import { isOutdatedBackendError } from '@/lib/agent-errors'
 import {
   toolDisplay,
   type PermissionOption,
@@ -65,6 +66,8 @@ export interface ThreadAsk {
   questions: UiAskQuestion[]
   resolved: boolean
   answer?: string
+  /** A workflow gate/question rather than the agent (spec 2026-09-30-workflow-node-editor). */
+  fromWorkflow?: boolean
 }
 
 /**
@@ -85,8 +88,17 @@ export interface ThreadPermission {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'opencode' | 'pi'
+  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot'
   authFailureId: string
+  /** The named agent account the rejection came from; absent for the default login. */
+  profileId?: string
+}
+
+/** Offered after an agent error saying its CLI is too old ("1.18.0 or newer is required"). */
+export interface ThreadAgentUpdateRequired {
+  kind: 'agent-update-required'
+  id: string
+  provider: ThreadProviderAuthRequired['provider']
 }
 
 export type ThreadEntry =
@@ -96,6 +108,7 @@ export type ThreadEntry =
   | ThreadAsk
   | ThreadPermission
   | ThreadProviderAuthRequired
+  | ThreadAgentUpdateRequired
 
 export interface ThreadTurn {
   /** Stable source-derived render key. The opening event sequence survives prepended pages;
@@ -132,6 +145,8 @@ export interface ThreadReduceOptions {
    * trailing ask block is provisional protocol text until turn-end either
    * emits its card or settles into the readable invalid-marker fallback. */
   activeTurn?: boolean
+  /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
+  runner?: string
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -177,11 +192,16 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-export function threadFooter(status: RunStatus, error?: string): ThreadFooter {
+export function threadFooter(status: RunStatus, error?: string, awaitingAnswer = false): ThreadFooter {
   switch (status) {
     case 'waiting':
       return { state: 'waiting' }
     case 'failed':
+      // The session closed on an unanswered question: the header says "needs you", so the footer
+      // must not announce a failure — the answer is the way forward, not a retry.
+      if (awaitingAnswer) {
+        return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
+      }
       return { state: 'closed', tone: 'danger', label: error ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }
@@ -238,7 +258,15 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'pi'
+  return (
+    value === 'claude' ||
+    value === 'codex' ||
+    value === 'junie' ||
+    value === 'opencode' ||
+    value === 'cursor' ||
+    value === 'pi' ||
+    value === 'copilot'
+  )
     ? value
     : undefined
 }
@@ -397,6 +425,20 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     return turn
   }
   const currentTurn = (): DraftTurn => turns.at(-1) ?? newTurn()
+
+  /** The backend of the latest session, which an outdated-CLI error is about. */
+  let sessionBackend: ThreadProviderAuthRequired['provider'] | undefined = providerId(options.runner)
+  /** One update card per turn: the v1 `error` and v2 `session.error` twins both match. */
+  const offeredUpdate = new WeakSet<DraftTurn>()
+  const offerAgentUpdate = (text: string, noteId: string) => {
+    const turn = currentTurn()
+    if (sessionBackend === undefined || offeredUpdate.has(turn) || !isOutdatedBackendError(text)) return
+    offeredUpdate.add(turn)
+    turn.entries.push({
+      origin: 'meta',
+      entry: { kind: 'agent-update-required', id: `${noteId}:update`, provider: sessionBackend },
+    })
+  }
 
   const itemKey = (event: RunEvent, itemId: string) => {
     return runItemKey(event.stepId, itemId)
@@ -603,6 +645,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           origin: 'meta',
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'danger' },
         })
+        offerAgentUpdate(text, `v1:${event.seq}`)
         break
       }
       case 'session.error': {
@@ -612,8 +655,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           origin: 'meta',
           entry: { kind: 'note', id: `v2:${event.seq}`, text, tone: 'danger' },
         })
+        offerAgentUpdate(text, `v2:${event.seq}`)
         break
       }
+      case 'session.started':
+        sessionBackend = providerId(event.backend) ?? sessionBackend
+        break
       case 'step-end': {
         // Steps stay out of the thread (they are header material) except the one thing the
         // transcript must not hide: a step that failed — mirroring the legacy renderer.
@@ -651,9 +698,16 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const provider = providerId(event.provider)
         const authFailureId = str(event.authFailureId)
         if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
+        const profileId = str(event.profileId)
         currentTurn().entries.push({
           origin: 'meta',
-          entry: { kind: 'provider-auth-required', id: `v1:${event.seq}`, provider, authFailureId },
+          entry: {
+            kind: 'provider-auth-required',
+            id: `v1:${event.seq}`,
+            provider,
+            authFailureId,
+            ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
+          },
         })
         break
       }
@@ -695,7 +749,13 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           ? rawQuestions as UiAskQuestion[]
           : rawQuestions.filter(isAskQuestion)
         if (questions.length === 0) break
-        const ask: ThreadAsk = { kind: 'ask', id: requestId, questions, resolved: false }
+        const ask: ThreadAsk = {
+          kind: 'ask',
+          id: requestId,
+          questions,
+          resolved: false,
+          ...(event.source === 'workflow' ? { fromWorkflow: true } : {}),
+        }
         currentTurn().entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
         break

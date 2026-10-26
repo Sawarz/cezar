@@ -4,8 +4,9 @@
  *
  * A thin HTTP client over the automations family, addressed like `cez task` is: `CEZ_API_URL`
  * (the cockpit) and `CEZ_PROJECT_ID` (which project the run belongs to), both put in every agent's
- * environment by the engine while the cockpit is reachable. No server: the command says so and
- * exits 2. Automations off on the cockpit (`CEZ_AUTOMATIONS` unset): every route answers 409 with
+ * environment by the engine while the cockpit is reachable; a person at a shell sets them by hand.
+ * No server: the command says so (`cockpit-address.ts`, worded for whoever is asking) and exits 2.
+ * Automations off on the cockpit (`CEZ_AUTOMATIONS` unset): every route answers 409 with
  * the flag's name, which this command relays verbatim and exits 1 — the agent is told to stop and
  * report, never to substitute a cron job or a polling script.
  *
@@ -15,12 +16,16 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { missingCockpitMessage } from '../cockpit-address.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
 
 export interface AutomationCliEnv {
   CEZ_API_URL?: string;
   CEZ_PROJECT_ID?: string;
+  /** Set for every agent by the engine; only read to pick who the missing-address message is for. */
+  CEZ_TASK_ID?: string;
 }
 
 export interface AutomationCliIo {
@@ -41,8 +46,8 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
   cez automation create [--file <def.json> | --json '<json>'] [--enable]
                                                 create one from a JSON definition (stdin when neither flag is given);
                                                 paused unless --enable
-  cez automation add --name <name> (--cron "<M H * * *>" | --on <event>[,<event>] --every <5m|1h>)
-                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner claude|codex|opencode]
+  cez automation add --name <name> (--cron "<M H * * *>" | --at "YYYY-MM-DD HH:MM" | --on <event>[,<event>] --every <5m|1h>)
+                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner ${RUNNER_IDS.join('|')}]
                      [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
                      [--label <l>]... [--author <a>]... [--enable]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"
@@ -137,21 +142,34 @@ export function parseEvery(value: string): number {
   return unit === 'h' ? n * 3_600 : unit === 'm' ? n * 60 : n;
 }
 
+/** `--at "YYYY-MM-DD HH:MM"` (or `T` between them) as a `once` schedule; `null` when it is not one. */
+export function parseAt(value: string): AutomationSchedule | null {
+  const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const [, date, hourText, minuteText] = match as unknown as [string, string, string, string];
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (hour > 23 || minute > 59 || !parseScheduleDate(date)) return null;
+  return { type: 'once', date, hour, minute };
+}
+
 /** The `add` flags as the `create` body they stand for. Exported so the tests pin the mapping. */
 export function bodyFromAddFlags(values: {
-  name?: string; cron?: string; on?: string; every?: string; prompt?: string; kind?: string; 'to-status'?: string[]; 'changed-label'?: string[]; 'require-label'?: string[];
+  name?: string; cron?: string; at?: string; on?: string; every?: string; prompt?: string; kind?: string; 'to-status'?: string[]; 'changed-label'?: string[]; 'require-label'?: string[];
   workflow?: string; runner?: string; model?: string; autonomous?: boolean; 'no-autonomous'?: boolean;
   dispatch?: boolean; 'max-subtasks'?: string; 'review-child'?: boolean; label?: string[]; author?: string[]; enable?: boolean;
 }, prompt: string): Record<string, unknown> {
   if (!values.name?.trim()) throw new Error('--name is required');
   if (!prompt.trim()) throw new Error('--prompt (or --prompt-file) is required');
-  if (values.cron && values.on) throw new Error('give --cron (a schedule) OR --on (a GitHub poll), not both');
-  if (!values.cron && !values.on) throw new Error('give --cron "<M H * * *>" for a schedule or --on <event> for a GitHub poll');
+  if (values.cron && values.at) throw new Error('give --cron (a recurring schedule) OR --at (one run), not both');
+  const timed = values.cron ?? values.at;
+  if (timed && values.on) throw new Error(`give --${values.cron ? 'cron' : 'at'} (a schedule) OR --on (a GitHub poll), not both`);
+  if (!timed && !values.on) throw new Error('give --cron "<M H * * *>" or --at "<YYYY-MM-DD HH:MM>" for a schedule, or --on <event> for a GitHub poll');
   if (values.kind && !['github', 'schedule', 'tracker'].includes(values.kind)) throw new Error('--kind must be github, schedule or tracker');
-  if (values.kind === 'tracker' && (values.cron || values.label?.length || values.author?.length)) throw new Error('tracker polls use --on and --to-status/--changed-label, not --cron/--label/--author');
+  if (values.kind === 'tracker' && (timed || values.label?.length || values.author?.length)) throw new Error('tracker polls use --on and --to-status/--changed-label, not --cron/--at/--label/--author');
   if (values.kind !== 'tracker' && (values['to-status']?.length || values['changed-label']?.length || values['require-label']?.length)) throw new Error('--to-status/--changed-label/--require-label require --kind tracker');
-  if (values.kind === 'schedule' && !values.cron) throw new Error('--kind schedule requires --cron');
-  if (values.kind === 'github' && values.cron) throw new Error('--kind github requires --on');
+  if (values.kind === 'schedule' && !timed) throw new Error('--kind schedule requires --cron or --at');
+  if (values.kind === 'github' && timed) throw new Error('--kind github requires --on');
   const task: Record<string, unknown> = { prompt, worktree: true, autonomous: values['no-autonomous'] ? false : true };
   if (values.workflow) task.workflow = values.workflow;
   if (values.runner) task.runner = values.runner;
@@ -167,10 +185,15 @@ export function bodyFromAddFlags(values: {
     task.dispatch = dispatch;
   }
   const body: Record<string, unknown> = { name: values.name.trim(), task };
-  if (values.cron) {
+  if (values.at) {
+    const schedule = parseAt(values.at);
+    if (!schedule) throw new Error(`--at "${values.at}" is not a date and time; give "YYYY-MM-DD HH:MM" in the cockpit's time zone, e.g. --at "2026-10-05 23:00"`);
+    body.kind = 'schedule';
+    body.schedule = schedule;
+  } else if (values.cron) {
     const schedule: AutomationSchedule | null = parseCron(values.cron);
     if (!schedule) {
-      throw new Error(`--cron "${values.cron}" is not one of the shapes a schedule can take (${SCHEDULE_TYPES.join(', ')}): "M H * * *", "M H * * 1-5", "M H * * D" (0 or 7 = Sunday) or "0 */N * * *" (N in 1,2,3,4,6,8,12). For anything else use the JSON form: cez automation schema`);
+      throw new Error(`--cron "${values.cron}" is not one of the shapes a recurring schedule can take (${SCHEDULE_TYPES.filter((type) => type !== 'once').join(', ')}): "M H * * *", "M H * * 1-5", "M H * * D" (0 or 7 = Sunday) or "0 */N * * *" (N in 1,2,3,4,6,8,12). For a single run use --at; for anything else use the JSON form: cez automation schema`);
     }
     body.kind = 'schedule';
     body.schedule = schedule;
@@ -221,7 +244,11 @@ export async function runAutomationCommand(
   }
   const api = base(env);
   if (!api) {
-    io.error('cez automation: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with automations on. Do not substitute a cron job, a GitHub Action or a polling script: stop and report that automations are unavailable.');
+    io.error(missingCockpitMessage({
+      command: 'cez automation',
+      example: 'cez automation list',
+      insideTask: 'this command only works inside a task run by a cockpit with automations on. Do not substitute a cron job, a GitHub Action or a polling script: stop and report that automations are unavailable.',
+    }, env));
     return 2;
   }
   const json = async (url: string, init?: RequestInit): Promise<Response> =>
@@ -265,7 +292,7 @@ export async function runAutomationCommand(
           allowPositionals: false,
           options: {
             kind: { type: 'string' }, 'to-status': { type: 'string', multiple: true }, 'changed-label': { type: 'string', multiple: true }, 'require-label': { type: 'string', multiple: true },
-            name: { type: 'string' }, cron: { type: 'string' }, on: { type: 'string' }, every: { type: 'string' },
+            name: { type: 'string' }, cron: { type: 'string' }, at: { type: 'string' }, on: { type: 'string' }, every: { type: 'string' },
             prompt: { type: 'string' }, 'prompt-file': { type: 'string' },
             workflow: { type: 'string' }, runner: { type: 'string' }, model: { type: 'string' },
             autonomous: { type: 'boolean', default: false }, 'no-autonomous': { type: 'boolean', default: false },
